@@ -1,0 +1,487 @@
+// sheepdog — a small local server for the herdr board.
+// Reads live state from herdr, mixes in priorities from state/projects.json,
+// and accumulates "when we first saw this state" in state/seen.json (keyed by
+// folder, not by pane id: panes get recreated, folders live on).
+// Run: node bin\board-server.mjs [--open]  (or bin\board.cmd)
+
+import http from 'node:http';
+import { execFile } from 'node:child_process';
+import { readFile, writeFile, rename, mkdir, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const PORT = 4877;
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const STATE_DIR = path.join(ROOT, 'state');
+const PROJECTS_FILE = path.join(STATE_DIR, 'projects.json');
+const SEEN_FILE = path.join(STATE_DIR, 'seen.json');
+const PAGE_FILE = path.join(ROOT, 'bin', 'board.html');
+const SEEN_KEEP_MS = 7 * 24 * 3600 * 1000; // keep entries of vanished folders for a week
+
+const HERDR_CANDIDATES = [
+  path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Herdr', 'bin', 'herdr.exe'),
+  'herdr',
+];
+
+const KNOWN_STATUSES = new Set(['blocked', 'done', 'working', 'idle', 'unknown']);
+const COLUMNS = [
+  { key: 'blocked', title: 'Blocked — needs you' },
+  { key: 'done',    title: 'Done — review' },
+  { key: 'working', title: 'Working' },
+  { key: 'idle',    title: 'Idle' },
+  { key: 'unknown', title: 'Unknown' },
+];
+
+function herdr(args) {
+  return new Promise((resolve, reject) => {
+    const tryOne = (i) => {
+      execFile(HERDR_CANDIDATES[i], args, { maxBuffer: 32 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        if (err) {
+          if (err.code === 'ENOENT' && i + 1 < HERDR_CANDIDATES.length) return tryOne(i + 1);
+          const detail = String(stderr || '').trim() || err.message;
+          return reject(new Error(`herdr ${args[0]} ${args[1] ?? ''}: ${detail}`));
+        }
+        try { resolve(JSON.parse(stdout)); }
+        catch { reject(new Error(`herdr ${args.join(' ')}: response is not JSON`)); }
+      });
+    };
+    tryOne(0);
+  });
+}
+
+// Paths from herdr arrive in mixed shapes: \\?\ prefixes, forward slashes.
+function normPath(p) {
+  if (!p) return '';
+  let s = String(p);
+  if (s.startsWith('\\\\?\\')) s = s.slice(4);
+  s = s.replaceAll('/', '\\').toLowerCase();
+  while (s.endsWith('\\')) s = s.slice(0, -1);
+  return s;
+}
+
+// Queue: all state-file writes go one at a time, no races.
+let queueTail = Promise.resolve();
+function queued(fn) {
+  const p = queueTail.then(fn, fn);
+  queueTail = p.then(() => {}, () => {});
+  return p;
+}
+
+// Write via temp file + rename: an interrupted write leaves no stub behind.
+async function writeJsonAtomic(file, obj) {
+  const tmp = file + '.tmp';
+  await writeFile(tmp, JSON.stringify(obj, null, 2));
+  await rename(tmp, file);
+}
+
+// Soft read: missing file — empty object. Broken JSON — also empty, so this
+// is only used where an in-memory fallback copy exists.
+async function readJsonSoft(file, fallback) {
+  try { return JSON.parse(await readFile(file, 'utf8')); }
+  catch { return fallback; }
+}
+
+// Strict read: a broken file is an error, not a silent "start from scratch".
+async function readJsonStrict(file) {
+  let text;
+  try { text = await readFile(file, 'utf8'); }
+  catch (e) {
+    if (e.code === 'ENOENT') return {};
+    throw new Error(`cannot read ${path.basename(file)}: ${e.message}`);
+  }
+  try { return JSON.parse(text); }
+  catch {
+    throw new Error(`${path.basename(file)} is corrupted — refusing to write, fix the file by hand (it is in git)`);
+  }
+}
+
+// Last successfully parsed mapping — in case the file is being edited live.
+let projectsGood = null;
+async function loadProjects() {
+  try {
+    projectsGood = await readJsonStrict(PROJECTS_FILE);
+  } catch {
+    // broken or half-written file: keep living on the previous copy, never overwrite it
+  }
+  const map = new Map();
+  for (const [k, v] of Object.entries(projectsGood ?? {})) {
+    if (k.startsWith('_')) continue;
+    map.set(normPath(k), v);
+  }
+  return map;
+}
+
+// Longest matching prefix: a subfolder inherits its parent's entry.
+function matchProject(projects, cwd) {
+  let key = normPath(cwd);
+  while (key) {
+    if (projects.has(key)) return projects.get(key);
+    const cut = key.lastIndexOf('\\');
+    if (cut < 0) break;
+    key = key.slice(0, cut);
+  }
+  return null;
+}
+
+// Memory is the source of truth for "when first seen"; disk is only for restarts.
+let seenCache = null;
+async function loadSeen() {
+  if (!seenCache) seenCache = await readJsonSoft(SEEN_FILE, {});
+  return seenCache;
+}
+
+// Key is "folder|state". If the folder is present in the agent list, states it
+// no longer has are deleted (the state really changed). If the folder vanished
+// from the list entirely (agent unrecognized for a minute), entries are left
+// alone so "stuck 6 h" doesn't reset; truly old ones age out.
+// Short string fingerprint — for title-age keys.
+function strHash(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function updateSeen(seen, agentList, nowIso) {
+  const nowMs = Date.parse(nowIso);
+  const byCwd = new Map();
+  for (const a of agentList) {
+    const c = normPath(a.cwd);
+    if (!byCwd.has(c)) byCwd.set(c, new Set());
+    byCwd.get(c).add(a.agent_status);
+  }
+  for (const [c, statuses] of byCwd) {
+    for (const st of statuses) {
+      const k = `${c}|${st}`;
+      if (!seen[k]) seen[k] = { since: nowIso };
+      seen[k].last = nowIso;
+    }
+    // "~pulse" — when the folder last did any work; survives state changes
+    if (statuses.has('working')) seen[`${c}|~pulse`] = { since: nowIso, last: nowIso };
+    for (const k of Object.keys(seen)) {
+      const suffix = k.slice(c.length + 1);
+      if (k.startsWith(c + '|') && !suffix.startsWith('~') && !statuses.has(suffix)) delete seen[k];
+    }
+  }
+  // Title age: when we first saw this exact title on this folder.
+  for (const a of agentList) {
+    const t = a.terminal_title_stripped || a.terminal_title || '';
+    if (!t) continue;
+    const k = `${normPath(a.cwd)}|~t:${strHash(t)}`;
+    if (!seen[k]) seen[k] = { since: nowIso };
+    seen[k].last = nowIso;
+  }
+  for (const k of Object.keys(seen)) {
+    const last = Date.parse(seen[k].last ?? nowIso);
+    if (nowMs - last > SEEN_KEEP_MS) delete seen[k];
+  }
+}
+
+// Card = session (herdr pane). As many open sessions as there are cards,
+// nothing is merged. One herdr call returns the whole picture.
+// --- Second-machine bridge: part of the fleet may run on another computer,
+// which herdr here cannot see. While the board is open, we poll that machine
+// over ssh once every few minutes (read-only: list agent processes) and use
+// state/remote-bridge.json to figure out whose cards those are.
+// Off by default: set SHEEPDOG_REMOTE_HOST to an ssh alias to enable.
+const REMOTE_HOST = process.env.SHEEPDOG_REMOTE_HOST || '';
+const REMOTE_FILE = path.join(STATE_DIR, 'remote-bridge.json');
+const REMOTE_STALE_MS = 300_000; // every 5 minutes, and only while the board is open
+let remoteState = { checkedAt: 0, ok: false, hints: [] };
+let remoteChecking = false;
+
+function sshRemoteProcesses() {
+  return new Promise((resolve) => {
+    execFile('ssh', ['-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes', REMOTE_HOST, 'pgrep -fl "codex exec" || true'],
+      { timeout: 20000, windowsHide: true }, (err, stdout) => resolve(err ? null : String(stdout)));
+  });
+}
+
+async function refreshRemote() {
+  if (!REMOTE_HOST) return;
+  if (remoteChecking || Date.now() - remoteState.checkedAt < REMOTE_STALE_MS) return;
+  remoteChecking = true;
+  try {
+    const out = await sshRemoteProcesses();
+    if (out === null) { remoteState = { checkedAt: Date.now(), ok: false, hints: [] }; return; }
+    const hints = new Set();
+    // Folder names that hold project checkouts on the second machine — adjust to taste.
+    for (const m of out.matchAll(/(?:kitchens|Developer|projects|work)\/([\w.-]+)/g)) hints.add(m[1]);
+    remoteState = { checkedAt: Date.now(), ok: true, hints: [...hints] };
+  } finally { remoteChecking = false; }
+}
+
+async function collect() {
+  if (remoteState.checkedAt === 0) await refreshRemote(); else refreshRemote();
+  const [snapRes, wsListRes, projects, seen, remoteMapRaw] = await Promise.all([
+    herdr(['api', 'snapshot']),
+    herdr(['workspace', 'list']).catch(() => null), // the snapshot lacks the repo binding
+    loadProjects(),
+    loadSeen(),
+    readJsonSoft(REMOTE_FILE, {}),
+  ]);
+  const repoByWs = new Map();
+  for (const w of wsListRes?.result?.workspaces ?? []) {
+    if (w.worktree?.repo_name) repoByWs.set(w.workspace_id, w.worktree.repo_name);
+  }
+  // Active folders: hints from the second machine, translated to local paths.
+  const remotePrefixes = [];
+  for (const hint of remoteState.hints) {
+    for (const p of remoteMapRaw[hint] ?? []) remotePrefixes.push(normPath(p));
+  }
+  const onRemote = (cwd) => remotePrefixes.some(pref => cwd === pref || cwd.startsWith(pref + '\\'));
+
+  const now = new Date().toISOString();
+  const snap = snapRes?.result?.snapshot ?? {};
+  const wsById = new Map((snap.workspaces ?? []).map(w => [w.workspace_id, w]));
+  const tabById = new Map((snap.tabs ?? []).map(t => [t.tab_id, t]));
+  const panes = snap.panes ?? [];
+
+  await queued(async () => {
+    updateSeen(seen, panes, now);
+    await writeJsonAtomic(SEEN_FILE, seen);
+  });
+
+  const JUNK_TITLES = new Set(['Claude Code', 'claude · resume', 'codex · resume']);
+  const cards = panes.map((p) => {
+    const ws = wsById.get(p.workspace_id);
+    const tab = tabById.get(p.tab_id);
+    const status = KNOWN_STATUSES.has(p.agent_status) ? p.agent_status : 'unknown';
+    const cwd = normPath(p.cwd);
+    const proj = matchProject(projects, cwd);
+    // A single-tab window's card is named after the window; with several tabs
+    // the tab name ("Alice", "weekly") wins and the window moves to the caption.
+    // Nameless tabs ("1", "2") don't count as names.
+    const multiTab = (ws?.tab_count ?? 1) > 1;
+    const tabName = tab?.label && !/^\d+$/.test(tab.label) ? tab.label : null;
+    const label = (multiTab ? tabName : null) || ws?.label || tab?.label || '';
+    // Empty titles, titles hidden with the × button, and stale ones (unchanged
+    // for 3 days) are not shown — a "prep for the morning shift" title four
+    // days later only misleads.
+    let title = p.terminal_title_stripped || p.terminal_title || '';
+    if (JUNK_TITLES.has(title) || title === label || title === proj?.hideTitle) title = '';
+    if (title) {
+      const born = seen[`${cwd}|~t:${strHash(title)}`]?.since;
+      if (born && Date.parse(now) - Date.parse(born) > 72 * 3600 * 1000) title = '';
+    }
+    return {
+      id: p.pane_id,
+      tabId: p.tab_id,
+      number: ws?.number ?? null,
+      wsLabel: ws?.label ?? '',
+      repo: repoByWs.get(p.workspace_id) ?? null,
+      label,
+      status,
+      focused: p.focused,
+      cwd,
+      dir: proj?.dir ?? null,
+      prio: proj?.prio ?? null,
+      star: proj?.star === true,
+      kind: proj?.kind ?? null,
+      view: proj?.view ?? null,
+      note: proj?.note ?? null,
+      remote: onRemote(cwd),
+      lastWorkingAt: p.agent_status === 'working' ? now : (seen[`${cwd}|~pulse`]?.last ?? null),
+      title,
+      agent: p.agent ?? null,
+      since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,
+    };
+  });
+
+  return {
+    generatedAt: now,
+    columns: COLUMNS,
+    cards,
+    windows: (snap.workspaces ?? []).length,
+    focusedTab: snap.focused_tab_id ?? null,
+    remote: { ok: remoteState.ok, tasks: remoteState.hints },
+    retire: Object.fromEntries(retireJobs),
+    team: await readJsonSoft(path.join(STATE_DIR, 'team.json'), null),
+  };
+}
+
+// Which fields the board may change, and how: null erases the field.
+const FIELD_CHECK = {
+  prio: v => v === null || ['P1', 'P2', 'P3'].includes(v),
+  star: v => v === null || typeof v === 'boolean',
+  kind: v => v === null || ['temp', 'ongoing'].includes(v),
+  view: v => v === null || ['mine', 'team', 'other'].includes(v),
+  hideTitle: v => v === null || (typeof v === 'string' && v.length <= 300),
+  note: v => v === null || (typeof v === 'string' && v.length <= 300),
+};
+
+function setFields(cwd, patch) {
+  return queued(async () => {
+    const raw = await readJsonStrict(PROJECTS_FILE);
+    const key = normPath(cwd);
+    if (!key) throw new Error('this session has no folder — nowhere to store the value');
+    for (const [f, v] of Object.entries(patch)) {
+      if (!FIELD_CHECK[f]) throw new Error(`unknown field ${f}`);
+      if (!FIELD_CHECK[f](v)) throw new Error(`bad value for field ${f}`);
+    }
+    // Look for an existing key (itself or a parent), otherwise create a new one.
+    let target = null;
+    for (const k of Object.keys(raw)) {
+      if (k.startsWith('_')) continue;
+      const nk = normPath(k);
+      if (nk === key || key.startsWith(nk + '\\')) {
+        if (!target || nk.length > normPath(target).length) target = k;
+      }
+    }
+    // Never overwrite a parent entry — create a precise one for this folder.
+    const base = target && normPath(target) !== key ? { ...raw[target] } : (raw[target] ?? {});
+    const entryKey = target && normPath(target) === key ? target : key;
+    const entry = { ...base };
+    for (const [f, v] of Object.entries(patch)) {
+      if (v === null) delete entry[f];
+      else entry[f] = v;
+    }
+    raw[entryKey] = entry;
+    await writeJsonAtomic(PROJECTS_FILE, raw);
+    projectsGood = raw;
+  });
+}
+
+// --- "Save memory and close": instruct the session, wait, log, close ---
+const CLOSED_LOG = path.join(STATE_DIR, 'closed.jsonl');
+const RETIRE_PROMPT = 'The operator is closing this window from the board. Wrap up: save everything '
+  + 'important from this session into the project\'s memory — however this project does it '
+  + '(memory files, handover notes). Commit any uncommitted changes. Do not send anything to anyone. '
+  + 'When done, simply end your turn: the window will close and the session can be resumed later.';
+const retireJobs = new Map(); // tab_id -> { phase, startedAt, error }
+
+function statusFrom(obj) {
+  const m = JSON.stringify(obj ?? {}).match(/"agent_status":"(\w+)"/);
+  return m ? m[1] : null;
+}
+
+async function runRetire({ pane, tab, ws, hasAgent, label, wsLabel, cwd, title }) {
+  const job = { phase: 'sending instructions', startedAt: new Date().toISOString(), error: null };
+  retireJobs.set(tab, job);
+  try {
+    if (hasAgent) {
+      job.phase = 'session is saving its memory';
+      // --wait on prompt requires SEEING a state change: if the session hasn't
+      // picked up the instruction within 5s, herdr returns agent_prompt_stalled —
+      // and we do NOT close. (Without this there was a race: an idle session
+      // "finished" instantly and a window once closed before the instruction landed.)
+      await herdr(['agent', 'prompt', pane, RETIRE_PROMPT, '--wait',
+        '--until', 'idle', '--until', 'done', '--until', 'blocked', '--timeout', '900000']);
+      // If the session was busy, the instruction may have queued up — wait
+      // until it has actually processed it and gone quiet.
+      for (let i = 0; i < 3; i++) {
+        const st = statusFrom(await herdr(['agent', 'get', pane]).catch(() => null));
+        if (st === 'blocked') {
+          job.phase = 'stopped';
+          job.error = 'the session is asking something — check the window, not closing it';
+          return;
+        }
+        if (st !== 'working') break;
+        await herdr(['agent', 'wait', pane, '--until', 'idle', '--until', 'done', '--until', 'blocked', '--timeout', '900000']);
+      }
+    }
+    job.phase = 'writing the close log';
+    const entry = { at: new Date().toISOString(), wsLabel, label, cwd, title, tab, pane };
+    await writeFile(CLOSED_LOG, JSON.stringify(entry) + '\n', { flag: 'a' });
+    job.phase = 'closing the window';
+    const wsInfo = await herdr(['workspace', 'get', ws]).catch(() => null);
+    const tabCount = wsInfo?.result?.workspace?.tab_count ?? 1;
+    if (tabCount <= 1) await herdr(['workspace', 'close', ws]);
+    else await herdr(['tab', 'close', tab]);
+    job.phase = 'closed';
+  } catch (e) {
+    job.phase = 'error';
+    job.error = String(e.message || e);
+  } finally {
+    setTimeout(() => retireJobs.delete(tab), 10 * 60 * 1000);
+  }
+}
+
+function send(res, code, body, type = 'application/json; charset=utf-8') {
+  res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+  res.end(body);
+}
+
+// Log of recent requests — to tell whether the page is actually polling
+// (see: GET /debug).
+const requestLog = [];
+function logRequest(req) {
+  requestLog.push({
+    at: new Date().toISOString(),
+    path: req.url,
+    ua: (req.headers['user-agent'] || '').slice(0, 80),
+  });
+  if (requestLog.length > 100) requestLog.splice(0, requestLog.length - 100);
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/board')) {
+      return send(res, 200, await readFile(PAGE_FILE), 'text/html; charset=utf-8');
+    }
+    if (req.method === 'GET' && url.pathname === '/data') {
+      logRequest(req);
+      const payload = await collect();
+      // Page version = board.html mtime: the page reloads itself
+      // when the file on disk has changed.
+      payload.pageVersion = (await stat(PAGE_FILE).catch(() => null))?.mtimeMs ?? null;
+      return send(res, 200, JSON.stringify(payload));
+    }
+    if (req.method === 'GET' && url.pathname === '/debug') {
+      return send(res, 200, JSON.stringify(requestLog));
+    }
+    if (req.method === 'POST' && url.pathname === '/focus') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const { tab } = JSON.parse(body);
+      if (!/^w[0-9A-Za-z]*:t\d+$/.test(String(tab))) return send(res, 400, '{"error":"bad tab id"}');
+      await herdr(['tab', 'focus', String(tab)]);
+      return send(res, 200, '{"ok":true}');
+    }
+    if (req.method === 'POST' && url.pathname === '/retire') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const j = JSON.parse(body);
+      if (!/^w[0-9A-Za-z]*:p\d+$/.test(String(j.pane)) || !/^w[0-9A-Za-z]*:t\d+$/.test(String(j.tab)) || !/^w[0-9A-Za-z]+$/.test(String(j.ws))) {
+        return send(res, 400, '{"error":"bad pane/tab/window ids"}');
+      }
+      if (retireJobs.has(j.tab)) return send(res, 409, '{"error":"already closing"}');
+      runRetire(j); // in the background; progress is visible in /data
+      return send(res, 200, '{"ok":true}');
+    }
+    if (req.method === 'POST' && url.pathname === '/set') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const { cwd, ...patch } = JSON.parse(body);
+      await setFields(cwd, patch);
+      return send(res, 200, '{"ok":true}');
+    }
+    if (req.method === 'POST' && url.pathname === '/prio') {
+      // legacy path, kept for pages that haven't reloaded yet
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const { cwd, prio } = JSON.parse(body);
+      await setFields(cwd, { prio });
+      return send(res, 200, '{"ok":true}');
+    }
+    send(res, 404, '{"error":"no such path"}');
+  } catch (e) {
+    send(res, 500, JSON.stringify({ error: String(e.message || e) }));
+  }
+});
+
+await mkdir(STATE_DIR, { recursive: true });
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.log(`Board already running: http://127.0.0.1:${PORT}`);
+    process.exit(0);
+  }
+  throw e;
+});
+server.listen(PORT, '127.0.0.1', () => {
+  const url = `http://127.0.0.1:${PORT}`;
+  console.log(`sheepdog board: ${url}`);
+  if (process.argv.includes('--open')) {
+    execFile('cmd', ['/c', 'start', '', url], { windowsHide: true }, () => {});
+  }
+});

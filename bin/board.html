@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sheepdog</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1b1e24;
+    --card: #20242b;
+    --card-edge: #2a2f38;
+    --ink: #d6d9de;
+    --ink-dim: #8b919a;
+    --ink-faint: #5c6370;
+
+    --st-blocked: #e05d5d;
+    --st-done: #e0a84f;
+    --st-working: #5fb97a;
+    --st-idle: #566070;
+    --st-unknown: #454a52;
+    --violet: #b287fd;
+
+    --mono: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+    --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 14px;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 18px 8px;
+  }
+  header h1 {
+    font-family: var(--mono);
+    font-size: 15px; font-weight: 600; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink);
+  }
+  #views { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--card-edge); border-radius: 8px; padding: 2px; }
+  .viewtab {
+    font-size: 13px; color: var(--ink-dim); padding: 4px 14px; border-radius: 6px;
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .viewtab.on { background: var(--card); color: var(--ink); font-weight: 600; }
+  .viewtab .n { color: var(--ink-faint); font-size: 11px; margin-left: 4px; }
+  #updated { color: var(--ink-faint); font-size: 12px; }
+  #error {
+    display: none; color: #14161a; background: var(--st-blocked);
+    font-size: 12px; padding: 2px 10px; border-radius: 4px;
+  }
+  #filters { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .chip {
+    font-size: 12px; color: var(--ink-dim);
+    background: var(--panel); border: 1px solid var(--card-edge);
+    border-radius: 20px; padding: 3px 11px; cursor: pointer; user-select: none;
+  }
+  .chip .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+  .chip.on { color: var(--ink); border-color: var(--ink-faint); background: var(--card); }
+
+  #board {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(230px, 1fr));
+    gap: 12px;
+    padding: 4px 18px 18px;
+    height: calc(100vh - 50px);
+    overflow-x: auto;
+  }
+  #board.list { display: block; overflow-y: auto; max-width: 860px; }
+  .col { display: flex; flex-direction: column; min-width: 0; }
+  .col-head {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 6px 2px 8px;
+    border-top: 3px solid var(--col-color, var(--ink-faint));
+  }
+  .col-head .name {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase;
+    color: var(--col-color, var(--ink-dim));
+  }
+  .col-head .count { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+  .col-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 20px; scrollbar-width: thin; scrollbar-color: var(--card-edge) transparent; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-left: 4px solid var(--dir-color, var(--card-edge));
+    border-radius: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+  }
+  .card:hover { border-color: var(--ink-faint); border-left-color: var(--dir-color, var(--ink-faint)); }
+  .card.dim { opacity: .55; }
+  .card.alarm { border-color: var(--st-blocked); border-left-color: var(--st-blocked); }
+  .alarm-note { color: var(--st-blocked); font-weight: 600; }
+  .card.focused {
+    border-color: var(--violet);
+    box-shadow: 0 0 0 2px var(--violet), 0 0 24px #b287fd80;
+    background: #2a2440;
+  }
+  .card.focused .ws-num::after {
+    content: ' YOU ARE HERE';
+    color: var(--violet);
+    font-weight: 700;
+    letter-spacing: .08em;
+  }
+  .card.mini { padding: 4px 10px; display: flex; align-items: center; gap: 7px; }
+  .card.mini .ws-label { font-size: 12.5px; }
+  .mini-flag { flex: none; font-size: 11px; }
+  .mini-age { margin-left: auto; flex: none; font-size: 11px; color: var(--ink-faint); }
+  .exp { flex: none; cursor: pointer; color: var(--ink-faint); font-size: 11px; padding: 0 3px; }
+  .exp:hover { color: var(--ink); }
+
+  .card-top { display: flex; align-items: center; gap: 8px; }
+  .ws-num { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); flex: none; }
+  .ws-label { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .repo { color: var(--ink-faint); font-size: 12px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badges { margin-left: auto; display: flex; gap: 4px; align-items: center; flex: none; }
+  .prio, .star, .kind {
+    cursor: pointer; user-select: none;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    padding: 1px 7px; border-radius: 4px; border: 1px solid var(--card-edge); color: var(--ink-faint);
+  }
+  .prio.P1 { color: #ff9d9d; border-color: #6e3a3a; background: #35232366; }
+  .prio.P2 { color: #eec387; border-color: #6e5a34; background: #332c1e66; }
+  .prio.P3 { color: var(--ink-dim); }
+  .star { border: none; padding: 1px 2px; font-size: 13px; }
+  .star.on { color: #ffd257; }
+  .off { border: none; padding: 1px 2px; opacity: 0; }
+  .card:hover .off, .trow:hover .off { opacity: .6; }
+  .off.confirm { opacity: 1; color: var(--st-blocked); font-weight: 700; }
+  .kind.unset { opacity: 0; }
+  .card:hover .kind.unset { opacity: .55; }
+  .kind.temp { color: #9adcf0; border-color: #2f5a68; }
+  .kind.ongoing { color: var(--ink-dim); }
+
+  .panes { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+  .pane { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .pane .dot, .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+  .pane .t {
+    font-family: var(--mono); font-size: 12px; color: var(--ink-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .dot.blocked { background: var(--st-blocked); }
+  .dot.done { background: var(--st-done); }
+  .dot.working { background: var(--st-working); animation: pulse 1.6s ease-in-out infinite; }
+  .dot.idle { background: transparent; border: 1.5px solid var(--st-idle); }
+  .dot.unknown { background: transparent; border: 1.5px dashed var(--st-unknown); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .dot.working { animation: none; } }
+  .hidebtn { flex: none; cursor: pointer; color: var(--ink-faint); opacity: 0; font-size: 12px; padding: 0 2px; }
+  .pane:hover .hidebtn { opacity: .8; }
+
+  .noteline {
+    margin-top: 5px; font-size: 12px; color: var(--st-done);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .noteline::before { content: '⚑ '; }
+  .remoteline {
+    margin-top: 5px; display: flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: 12px; color: var(--st-working);
+  }
+  .retire-line { margin-top: 5px; font-size: 12px; color: var(--violet); }
+  .retire-line.err { color: var(--st-blocked); }
+  .card-meta { margin-top: 6px; display: flex; gap: 10px; font-size: 11.5px; color: var(--ink-faint); }
+  .card-meta .age.hot { color: var(--st-done); }
+  .card-meta .age.vhot { color: var(--st-blocked); }
+
+  /* Team: one row per person */
+  .trow {
+    background: var(--card); border: 1px solid var(--card-edge); border-radius: 6px;
+    margin-bottom: 8px; padding: 9px 12px; cursor: pointer;
+  }
+  .trow:hover { border-color: var(--ink-faint); }
+  .trow.focused { border-color: var(--violet); box-shadow: 0 0 0 1px var(--violet); }
+  .trow-top { display: flex; align-items: center; gap: 9px; }
+  .trow-name { font-weight: 600; font-size: 14px; min-width: 90px; }
+  .trow-info { color: var(--ink-dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trow-right { margin-left: auto; display: flex; gap: 8px; align-items: center; flex: none; font-size: 11.5px; color: var(--ink-faint); }
+  .wait-chip { color: #ff9d9d; border: 1px solid #6e3a3a; background: #35232366; border-radius: 4px; padding: 1px 7px; font-weight: 600; font-size: 11px; }
+  .trow-items { margin-top: 7px; display: none; }
+  .trow.open .trow-items { display: block; }
+  .titem { font-size: 12.5px; color: var(--ink-dim); padding: 2px 0 2px 14px; }
+  .titem.wait { color: #ff9d9d; }
+  .titem.deadline { color: var(--st-done); }
+  .tsec { margin-top: 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); }
+</style>
+</head>
+<body>
+<header>
+  <h1>sheepdog</h1>
+  <nav id="views"></nav>
+  <span id="updated">loading…</span>
+  <span id="error"></span>
+  <nav id="filters"></nav>
+</header>
+<main id="board"></main>
+
+<script>
+// Direction colors: a fixed palette assigned by a stable hash of the
+// direction name, so any set of directions gets consistent colors
+// without hardcoding your life's categories into the source.
+const DIR_PALETTE = ['#4c8fe0', '#8f6fe8', '#d08770', '#6c7686', '#56b3a5', '#d979b8', '#a3c76d'];
+function dirColor(d) {
+  if (!d) return null;
+  let h = 5381;
+  for (const ch of String(d)) h = ((h * 33) ^ ch.codePointAt(0)) >>> 0;
+  return DIR_PALETTE[h % DIR_PALETTE.length];
+}
+const COL_COLORS = {
+  blocked: 'var(--st-blocked)',
+  done: 'var(--st-done)',
+  working: 'var(--st-working)',
+  idle: 'var(--st-idle)',
+  unknown: 'var(--st-unknown)',
+};
+const PRIO_NEXT = { P1: 'P2', P2: 'P3', P3: 'P1', '': 'P1' };
+const PRIO_RANK = { P1: 0, P2: 1, P3: 2 };
+const KIND_NEXT = { '': 'temp', temp: 'ongoing', ongoing: '' };
+const KIND_LABEL = { temp: '⏱ temp', ongoing: '∞' };
+const VIEWS = ['mine', 'team', 'other'];
+const VIEW_LABEL = { mine: 'Mine', team: 'Team', other: 'Other' };
+const PULSE_MS = 15 * 60 * 1000;
+
+let data = null;
+let filter = localStorage.getItem('board-filter') || '';
+let view = new URLSearchParams(location.search).get('view') || localStorage.getItem('board-view') || 'mine';
+if (!VIEWS.includes(view)) view = 'mine';
+let lastFocusedTab = null;
+let pageVersion = null;
+let pendingOff = null;
+let pendingOffTimer = null;
+const expanded = new Set();
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+function viewOf(c) {
+  return c.view ?? (c.status === 'unknown' ? 'other' : 'mine');
+}
+
+function age(sinceIso, now) {
+  if (!sinceIso) return null;
+  const mins = Math.round((now - new Date(sinceIso).getTime()) / 60000);
+  if (mins < 5) return null;
+  if (mins < 60) return `${mins} min`;
+  if (mins < 48 * 60) return `${Math.round(mins / 60)} h`;
+  return `${Math.round(mins / 60 / 24)} d`;
+}
+
+// "lane-1 · my-project": a branch window shows its parent project
+// unless the name already sounds in the card or window label.
+function repoNote(c) {
+  if (!c.repo) return '';
+  const norm = s => String(s ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const r = norm(c.repo);
+  const covers = (name) => {
+    const n = norm(name);
+    return n && (n.includes(r) || (n.length >= 4 && r.includes(n)));
+  };
+  if (!r || covers(c.label) || covers(c.wsLabel)) return '';
+  return `<span class="repo">· ${esc(c.repo)}</span>`;
+}
+
+function hasPulse(c, now) {
+  return c.star && c.lastWorkingAt && (now - new Date(c.lastWorkingAt).getTime()) < PULSE_MS;
+}
+function colOf(c, now) {
+  return (c.status !== 'blocked' && (c.remote || c.status === 'working' || hasPulse(c, now))) ? 'working' : c.status;
+}
+
+function offBtnHtml(c, extra) {
+  const offPending = pendingOff === c.tabId;
+  return `<span class="off ${offPending ? 'confirm' : ''} ${extra || ''}" data-pane="${esc(c.id)}" data-tab="${esc(c.tabId)}" data-ws="${esc(c.tabId.split(':')[0])}" title="Save memory and close the window">${offPending ? 'sure?' : '⏻'}</span>`;
+}
+
+function fullCard(c, colKey, now) {
+  const a = colOf(c, now) === c.status ? age(c.since, now) : null;
+  const ageCls = c.status === 'blocked' || c.status === 'done'
+    ? (a && a.includes('d') && !a.includes('min') ? 'vhot' : 'hot') : '';
+  const job = data.retire?.[c.tabId];
+  const badges = c.cwd
+    ? `<span class="badges">` + offBtnHtml(c) +
+      `<span class="star ${c.star ? 'on' : ''}" data-cwd="${esc(c.cwd)}" data-star="${c.star ? '1' : ''}" title="Star: must not stop">${c.star ? '★' : '☆'}</span>` +
+      `<span class="kind ${esc(c.kind || 'unset')}" data-cwd="${esc(c.cwd)}" data-kind="${esc(c.kind || '')}" title="Kind: ongoing (∞) or temporary (⏱)">${KIND_LABEL[c.kind] || '·'}</span>` +
+      `<span class="prio ${esc(c.prio || '')}" data-cwd="${esc(c.cwd)}" data-prio="${esc(c.prio || '')}" title="Click to change priority">${esc(c.prio || '·')}</span>` +
+      `</span>`
+    : `<span class="badges">` + offBtnHtml(c) + `<span class="prio" title="This session has no folder" style="cursor:default">·</span></span>`;
+  const titleLine = c.title
+    ? `<div class="panes"><div class="pane"><span class="dot ${esc(c.status)}"></span>` +
+      `<span class="t" title="${esc(c.title)}">${esc(c.title)}</span>` +
+      (c.cwd ? `<span class="hidebtn" data-cwd="${esc(c.cwd)}" data-title="${esc(c.title)}" title="Hide this title (until the task changes)">×</span>` : '') +
+      `</div></div>`
+    : '';
+  const pulseAgo = c.lastWorkingAt ? Math.round((now - new Date(c.lastWorkingAt).getTime()) / 60000) : null;
+  const macLine = c.remote
+    ? '<div class="remoteline"><span class="dot working"></span>agent working on second machine</div>'
+    : (c.status !== 'working' && hasPulse(c, now)
+      ? `<div class="remoteline"><span class="dot working"></span>pulse: active ${pulseAgo < 1 ? 'just now' : pulseAgo + ' min ago'}</div>`
+      : '');
+  const retireLine = job
+    ? `<div class="retire-line ${job.error ? 'err' : ''}">⏻ ${esc(job.error || job.phase)}</div>`
+    : '';
+  const wsNote = c.wsLabel && c.wsLabel !== c.label ? `<span>window ${esc(c.wsLabel)}</span>` : '';
+  const alarm = c.star && c.status !== 'working' && !c.remote && !hasPulse(c, now);
+  const isFocused = c.tabId && c.tabId === data.focusedTab;
+  return `<div class="card ${colKey === 'unknown' ? 'dim' : ''} ${alarm ? 'alarm' : ''} ${isFocused ? 'focused' : ''}" data-tab="${esc(c.tabId || '')}" title="Click to jump to this herdr tab" style="--dir-color:${dirColor(c.dir) || 'var(--card-edge)'}">
+    <div class="card-top">
+      <span class="ws-num">#${c.number ?? '·'}</span>
+      <span class="ws-label" title="${esc(c.cwd)}">${esc(c.label)}</span>
+      ${repoNote(c)}
+      ${badges}
+    </div>
+    ${titleLine}
+    ${macLine}
+    ${retireLine}
+    ${c.note ? `<div class="noteline" title="${esc(c.note)}">${esc(c.note)}</div>` : ''}
+    <div class="card-meta">
+      ${alarm ? '<span class="alarm-note">should be working — but idle!</span>' : ''}
+      ${c.dir ? `<span>${esc(c.dir)}</span>` : ''}
+      ${wsNote}
+      ${a ? `<span class="age ${ageCls}">stuck ${a}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function miniCard(c, now) {
+  const a = age(c.since, now);
+  const isFocused = c.tabId && c.tabId === data.focusedTab;
+  return `<div class="card mini ${isFocused ? 'focused' : ''}" data-tab="${esc(c.tabId || '')}" title="${esc(c.title || '')}&#10;Click to jump; arrow expands" style="--dir-color:${dirColor(c.dir) || 'var(--card-edge)'}">
+    <span class="exp" data-id="${esc(c.id)}" title="Expand">▸</span>
+    <span class="ws-num">#${c.number ?? '·'}</span>
+    <span class="ws-label">${esc(c.label)}</span>
+    ${repoNote(c)}
+    ${c.star ? '<span class="mini-flag" style="color:#ffd257">★</span>' : ''}
+    ${c.note ? `<span class="mini-flag" style="color:var(--st-done)" title="${esc(c.note)}">⚑</span>` : ''}
+    ${c.prio ? `<span class="mini-flag prio ${esc(c.prio)}" style="cursor:default">${esc(c.prio)}</span>` : ''}
+    <span class="mini-age">${a ? a : ''}</span>
+  </div>`;
+}
+
+function renderKanban(cards, now) {
+  const board = document.getElementById('board');
+  board.classList.remove('list'); // layout is driven by the class only, no inline styles
+  const scrolls = {};
+  board.querySelectorAll('.col-list').forEach(el => scrolls[el.dataset.col] = el.scrollTop);
+
+  board.innerHTML = data.columns.map(col => {
+    const inCol = cards
+      .filter(c => colOf(c, now) === col.key)
+      .sort((a, b) =>
+        (a.star ? 0 : 1) - (b.star ? 0 : 1) ||
+        (PRIO_RANK[a.prio] ?? 9) - (PRIO_RANK[b.prio] ?? 9) ||
+        (a.since || '9').localeCompare(b.since || '9') ||
+        a.number - b.number);
+    const cardsHtml = inCol.map(c => {
+      const alarm = c.star && c.status !== 'working' && !c.remote && !hasPulse(c, now);
+      const compact = col.key === 'idle' && !alarm && !expanded.has(c.id);
+      return compact ? miniCard(c, now) : fullCard(c, col.key, now);
+    }).join('');
+    return `<section class="col" style="--col-color:${COL_COLORS[col.key]}">
+      <div class="col-head"><span class="name">${esc(col.title)}</span><span class="count">${inCol.length}</span></div>
+      <div class="col-list" data-col="${col.key}">${cardsHtml}</div>
+    </section>`;
+  }).join('');
+
+  board.querySelectorAll('.col-list').forEach(el => {
+    if (scrolls[el.dataset.col]) el.scrollTop = scrolls[el.dataset.col];
+  });
+}
+
+// Team: one row per person — their herdr session plus tasks from state/team.json.
+function renderTeam(cards, now) {
+  const board = document.getElementById('board');
+  board.classList.add('list');
+  const team = data.team?.people ?? {};
+  const used = new Set();
+  const rows = [];
+
+  const personRow = (key, p) => {
+    const norm = s => String(s ?? '').toLowerCase();
+    const card = cards.find(c => norm(c.cwd).includes('\\people\\' + key) || norm(c.label) === key);
+    if (card) used.add(card.id);
+    const st = card ? card.status : null;
+    const lastW = card?.lastWorkingAt ? age(card.lastWorkingAt, now) : null;
+    const info = card
+      ? (st === 'working' ? 'session working'
+        : st === 'blocked' ? 'session waiting on you'
+        : lastW ? `session active ${lastW} ago` : 'session idle')
+      : 'no window';
+    const waiting = p?.waitingOnYou ?? [];
+    const wait = waiting.length;
+    const items = [];
+    if (waiting.length) {
+      items.push('<div class="tsec">waiting on you</div>');
+      for (const it of waiting) items.push(`<div class="titem wait">⚑ ${esc(it)}</div>`);
+    }
+    if (p?.deadlines?.length) {
+      items.push('<div class="tsec">deadlines</div>');
+      for (const it of p.deadlines) items.push(`<div class="titem deadline">⏰ ${esc(it)}</div>`);
+    }
+    if (p?.top?.length) {
+      items.push('<div class="tsec">on their plate</div>');
+      for (const it of p.top) items.push(`<div class="titem">• ${esc(it)}</div>`);
+    }
+    const isFocused = card && card.tabId === data.focusedTab;
+    return `<div class="trow ${expanded.has('p:' + key) ? 'open' : ''} ${isFocused ? 'focused' : ''}" data-tab="${esc(card?.tabId || '')}" data-exp="p:${esc(key)}">
+      <div class="trow-top">
+        <span class="exp" data-id="p:${esc(key)}">${expanded.has('p:' + key) ? '▾' : '▸'}</span>
+        <span class="dot ${esc(st || 'unknown')}"></span>
+        <span class="trow-name">${esc(p?.name || key)}</span>
+        <span class="trow-info">${esc(info)}${p?.trackerDate ? ` · tracker from ${esc(p.trackerDate)}` : ''}</span>
+        <span class="trow-right">
+          ${wait ? `<span class="wait-chip">waiting on you: ${wait}</span>` : ''}
+          ${p?.top?.length ? `<span>tasks: ${p.top.length}</span>` : ''}
+          ${card ? offBtnHtml(card) : ''}
+        </span>
+      </div>
+      <div class="trow-items">${items.join('') || '<div class="titem">nothing on the tracker</div>'}</div>
+    </div>`;
+  };
+
+  for (const key of Object.keys(team)) rows.push(personRow(key, team[key]));
+  // Team sessions not tied to a person (shared tabs and the like)
+  const rest = cards.filter(c => !used.has(c.id));
+  if (rest.length) {
+    rows.push('<div class="tsec" style="margin:10px 0 6px">Other team sessions</div>');
+    for (const c of rest) rows.push(miniCard(c, now));
+  }
+  board.innerHTML = rows.join('');
+}
+
+function renderMisc(cards, now) {
+  const board = document.getElementById('board');
+  board.classList.add('list');
+  const rows = cards
+    .sort((a, b) => (a.since || '9').localeCompare(b.since || '9'))
+    .map(c => {
+      const a = age(c.since, now);
+      return `<div class="card mini" data-tab="${esc(c.tabId || '')}" style="--dir-color:${dirColor(c.dir) || 'var(--card-edge)'}">
+        <span class="ws-num">#${c.number ?? '·'}</span>
+        <span class="ws-label">${esc(c.label)}</span>
+        ${repoNote(c)}
+        <span class="trow-info" style="margin-left:6px">${esc(c.title || '')}</span>
+        <span class="mini-age">${a ? 'stuck ' + a : ''}</span>
+        ${offBtnHtml(c, 'confirmable')}
+      </div>`;
+    });
+  board.innerHTML = '<div class="tsec" style="margin:6px 0 10px">Windows herdr does not recognize. The ⏻ button saves memory and closes.</div>' + rows.join('');
+}
+
+function render() {
+  if (!data) return;
+  const now = Date.now();
+
+  const counts = { mine: 0, team: 0, other: 0 };
+  for (const c of data.cards) counts[viewOf(c)] = (counts[viewOf(c)] ?? 0) + 1;
+  document.getElementById('views').innerHTML = VIEWS.map(v =>
+    `<span class="viewtab ${v === view ? 'on' : ''}" data-view="${v}">${VIEW_LABEL[v]}<span class="n">${counts[v] ?? 0}</span></span>`).join('');
+
+  let cards = data.cards.filter(c => viewOf(c) === view);
+
+  const filtersEl = document.getElementById('filters');
+  if (view === 'mine') {
+    const dirs = [...new Set(cards.map(c => c.dir).filter(Boolean))];
+    if (filter && !dirs.includes(filter)) { filter = ''; localStorage.setItem('board-filter', ''); }
+    filtersEl.innerHTML =
+      [`<span class="chip ${filter === '' ? 'on' : ''}" data-dir="">all</span>`]
+        .concat(dirs.map(d =>
+          `<span class="chip ${filter === d ? 'on' : ''}" data-dir="${esc(d)}">` +
+          `<span class="dot" style="background:${dirColor(d) || 'var(--ink-faint)'}"></span>${esc(d)}</span>`))
+        .join('');
+    cards = cards.filter(c => !filter || c.dir === filter);
+  } else {
+    filtersEl.innerHTML = '';
+  }
+
+  if (view === 'team') renderTeam(cards, now);
+  else if (view === 'other') renderMisc(cards, now);
+  else renderKanban(cards, now);
+
+  // focus changed inside herdr — scroll to the highlighted card
+  if (data.focusedTab && data.focusedTab !== lastFocusedTab) {
+    lastFocusedTab = data.focusedTab;
+    const el = document.querySelector('.card.focused, .trow.focused');
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  const t = new Date(data.generatedAt);
+  const remoteInfo = data.remote?.tasks?.length ? ` · second machine: ${data.remote.tasks.join(', ')}` : '';
+  document.getElementById('updated').textContent =
+    `sessions: ${data.cards.length} · windows: ${data.windows}${remoteInfo} · updated ` +
+    t.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg;
+  el.style.display = 'inline-block';
+}
+
+// seq drops stale responses, inflight keeps polls from overlapping.
+let seq = 0;
+let inflight = false;
+async function refresh(force) {
+  if (inflight && !force) return;
+  inflight = true;
+  const my = ++seq;
+  try {
+    const r = await fetch('/data');
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    const fresh = await r.json();
+    if (my !== seq) return; // a newer response already landed — discard
+    // page code on the server changed — reload ourselves
+    if (fresh.pageVersion) {
+      if (pageVersion && fresh.pageVersion !== pageVersion) { location.reload(); return; }
+      pageVersion = fresh.pageVersion;
+    }
+    data = fresh;
+    document.getElementById('error').style.display = 'none';
+    render();
+  } catch (e) {
+    if (my === seq) showError('herdr not responding: ' + e.message);
+  } finally {
+    inflight = false;
+  }
+}
+
+// Change a field on the server, showing the new value immediately.
+async function setField(cwd, patch, apply) {
+  data.cards.filter(c => c.cwd === cwd).forEach(apply);
+  render();
+  try {
+    const r = await fetch('/set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd, ...patch }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+  } catch (e) {
+    showError('save failed: ' + e.message);
+  }
+  refresh(true);
+}
+
+document.addEventListener('click', async (ev) => {
+  const vt = ev.target.closest('.viewtab');
+  if (vt) {
+    view = vt.dataset.view;
+    localStorage.setItem('board-view', view);
+    render();
+    return;
+  }
+  const chip = ev.target.closest('.chip');
+  if (chip) {
+    filter = chip.dataset.dir;
+    localStorage.setItem('board-filter', filter);
+    render();
+    return;
+  }
+  const exp = ev.target.closest('.exp');
+  if (exp) {
+    const id = exp.dataset.id;
+    if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+    render();
+    return;
+  }
+  const off = ev.target.closest('.off');
+  if (off && off.dataset.tab) {
+    clearTimeout(pendingOffTimer);
+    if (pendingOff !== off.dataset.tab) {
+      pendingOff = off.dataset.tab;
+      pendingOffTimer = setTimeout(() => { pendingOff = null; render(); }, 6000);
+      render();
+      return;
+    }
+    pendingOff = null;
+    const c = data.cards.find(x => x.tabId === off.dataset.tab);
+    try {
+      const r = await fetch('/retire', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pane: off.dataset.pane, tab: off.dataset.tab, ws: off.dataset.ws,
+          hasAgent: !!c?.agent, label: c?.label, wsLabel: c?.wsLabel, cwd: c?.cwd, title: c?.title,
+        }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || r.status);
+    } catch (e) {
+      showError('close failed: ' + e.message);
+    }
+    refresh(true);
+    return;
+  }
+  const star = ev.target.closest('.star');
+  if (star && star.dataset.cwd) {
+    const on = !star.dataset.star;
+    setField(star.dataset.cwd, { star: on || null }, c => { c.star = on; });
+    return;
+  }
+  const kind = ev.target.closest('.kind');
+  if (kind && kind.dataset.cwd) {
+    const next = KIND_NEXT[kind.dataset.kind] ?? 'temp';
+    setField(kind.dataset.cwd, { kind: next || null }, c => { c.kind = next || null; });
+    return;
+  }
+  const hide = ev.target.closest('.hidebtn');
+  if (hide && hide.dataset.cwd) {
+    const t = hide.dataset.title;
+    setField(hide.dataset.cwd, { hideTitle: t }, c => { if (c.title === t) c.title = ''; });
+    return;
+  }
+  const prio = ev.target.closest('.prio');
+  if (prio && prio.dataset.cwd) {
+    const next = PRIO_NEXT[prio.dataset.prio] || 'P1';
+    setField(prio.dataset.cwd, { prio: next }, c => { c.prio = next; });
+    return;
+  }
+  const card = ev.target.closest('.card, .trow');
+  if (card && card.dataset.tab) {
+    try {
+      const r = await fetch('/focus', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tab: card.dataset.tab }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || r.status);
+    } catch (e) {
+      showError('jump failed: ' + e.message);
+    }
+  }
+});
+
+// Chrome throttles timers of covered windows — refresh right away on return
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refresh(true);
+});
+window.addEventListener('focus', () => refresh(true));
+
+// Screenshot-testing helper: ?view=mine&then=team — render the first
+// tab, then switch to the second one after a second and a half.
+const thenView = new URLSearchParams(location.search).get('then');
+if (thenView && VIEWS.includes(thenView)) {
+  setTimeout(() => { view = thenView; render(); }, 1500);
+}
+
+refresh(true);
+setInterval(() => refresh(false), 3000);
+</script>
+</body>
+</html>
