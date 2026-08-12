@@ -91,7 +91,7 @@ async function readJsonStrict(file) {
   }
   try { return JSON.parse(text); }
   catch {
-    throw new Error(`${path.basename(file)} is corrupted — refusing to write, fix the file by hand (it is in git)`);
+    throw new Error(`${path.basename(file)} is corrupted — refusing to write, fix the file by hand (state/ is not in git — keep your own backups)`);
   }
 }
 
