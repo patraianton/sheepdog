@@ -68,7 +68,9 @@ SHEEPDOG_REMOTE_HOST=<your-ssh-alias> node bin/board-server.mjs
 
 The mapping "task on the second machine → local project folder" lives in
 `state/remote-bridge.json`. If the variable is not set, the feature is off
-and nothing is polled.
+and nothing is polled. By default the board looks for checkouts under
+`Developer/`, `projects/`, `work/` or `src/` on that machine; a `_dirs` array
+in the same file overrides the list.
 
 ## Privacy and footprint
 

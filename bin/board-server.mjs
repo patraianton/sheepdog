@@ -204,8 +204,11 @@ async function refreshRemote() {
     const out = await sshRemoteProcesses();
     if (out === null) { remoteState = { checkedAt: Date.now(), ok: false, hints: [] }; return; }
     const hints = new Set();
-    // Folder names that hold project checkouts on the second machine — adjust to taste.
-    for (const m of out.matchAll(/(?:kitchens|Developer|projects|work)\/([\w.-]+)/g)) hints.add(m[1]);
+    // Folder names that hold project checkouts on the second machine. Defaults
+    // cover common layouts; override with a "_dirs" array in remote-bridge.json.
+    const dirs = (await readJsonSoft(REMOTE_FILE, {}))._dirs ?? ['Developer', 'projects', 'work', 'src'];
+    const rx = new RegExp('(?:' + dirs.map(d => d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')/([\\w.-]+)', 'g');
+    for (const m of out.matchAll(rx)) hints.add(m[1]);
     remoteState = { checkedAt: Date.now(), ok: true, hints: [...hints] };
   } finally { remoteChecking = false; }
 }
