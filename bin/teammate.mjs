@@ -23,6 +23,11 @@ const HERDR_CANDIDATES = [
   'herdr',
 ];
 
+const TREEHOUSE_CANDIDATES = [
+  path.join(process.env.LOCALAPPDATA ?? '', 'treehouse', 'treehouse.exe'),
+  'treehouse',
+];
+
 // First word of a status line. Everything after the colon is free text.
 const REPORT_STATES = ['working', 'needs-decision', 'blocked', 'paused', 'done', 'failed'];
 const TERMINAL_STATES = new Set(['done', 'failed']);
@@ -86,6 +91,24 @@ function herdrText(args) {
     tryOne(0);
   });
 }
+
+// Plain exec with the same candidate fallback, for treehouse and git.
+function execCandidates(candidates, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const tryOne = (i) => {
+      execFile(candidates[i], args, { maxBuffer: 32 * 1024 * 1024, windowsHide: true, ...opts }, (err, stdout, stderr) => {
+        if (err) {
+          if (err.code === 'ENOENT' && i + 1 < candidates.length) return tryOne(i + 1);
+          return reject(new Error(String(stderr || '').trim() || err.message));
+        }
+        resolve(String(stdout ?? ''));
+      });
+    };
+    tryOne(0);
+  });
+}
+
+const git = (cwd, ...args) => execCandidates(['git'], args, { cwd });
 
 // ---------------------------------------------------------------- small tools
 
@@ -204,14 +227,23 @@ async function launcherIdentity() {
 
 // --------------------------------------------------------------------- launch
 
-function briefText({ id, task, cwd, status, captainPane }) {
+function briefText({ id, task, cwd, status, captainPane, tree }) {
   const psPath = status.replaceAll("'", "''");
+  const treePart = tree ? `
+## Your folder is a temporary copy
+
+You are in a pooled copy of the repository, on branch \`${tree.branch}\`
+created from the captain's current commit. **Commit your work to this branch
+as you go — only commits survive.** After the tab is closed the folder is
+wiped and returned to the pool; anything uncommitted is gone. Do not push
+and do not switch branches unless the task says to.
+` : '';
   return `# Task ${id}
 
 ${task}
 
 Working directory: \`${cwd}\`
-
+${treePart}
 ## Report as you go
 
 A captain agent in another tab of this window watches one file and nothing
@@ -259,14 +291,14 @@ closes the tab itself.
 }
 
 async function cmdNew(argv) {
-  const flags = parseFlags(argv, { cwd: null, model: null, label: null, file: null });
+  const flags = parseFlags(argv, { cwd: null, model: null, label: null, file: null, tree: false });
   const task = flags._.join(' ').trim();
   const fromFile = flags.file ? await readFile(path.resolve(flags.file), 'utf8') : '';
   const body = (task ? task + (fromFile ? '\n\n' + fromFile : '') : fromFile).trim();
-  if (!body) die('teammate new "<what the worker must do>" [--cwd <path>] [--file <brief.md>] [--model <name>]');
+  if (!body) die('teammate new "<what the worker must do>" [--tree] [--cwd <path>] [--file <brief.md>] [--model <name>]');
 
   const me = await launcherIdentity();
-  const cwd = path.resolve(flags.cwd ?? process.cwd());
+  const repo = path.resolve(flags.cwd ?? process.cwd());
   await mkdir(CREW_DIR, { recursive: true });
 
   let id = `tm-${stamp()}`;
@@ -278,7 +310,7 @@ async function cmdNew(argv) {
     id,
     task: body.split('\n')[0].slice(0, 200),
     state: 'creating',
-    cwd,
+    cwd: repo,
     created_at: new Date().toISOString(),
     captain: { pane_id: me.pane, tab_id: me.tab, workspace_id: me.ws },
     workspace_id: me.ws,
@@ -290,7 +322,41 @@ async function cmdNew(argv) {
     status: statusFile(id),
   };
   await writeJsonAtomic(cardFile(id), card);
-  await writeFile(briefFile(id), briefText({ id, task: body, cwd, status: statusFile(id), captainPane: me.pane }));
+
+  // --tree: the worker gets its own pooled copy of the repository (treehouse)
+  // on a fresh branch, so parallel workers never trip over each other's files.
+  if (flags.tree) {
+    let lease;
+    try {
+      lease = JSON.parse(await execCandidates(TREEHOUSE_CANDIDATES,
+        ['get', '--lease', '--json', '--lease-holder', id], { cwd: repo }));
+    } catch (e) {
+      card.state = 'failed-to-create';
+      card.error = `treehouse would not lease a worktree: ${e.message}`;
+      await writeJsonAtomic(cardFile(id), card);
+      die(`teammate: ${card.error}\nIs treehouse installed and is ${repo} a git repository?`);
+    }
+    try {
+      const base = (await git(repo, 'rev-parse', 'HEAD')).trim();
+      const branch = `tm/${id}`;
+      await git(lease.path, 'switch', '-c', branch, base);
+      card.repo = repo;
+      card.cwd = lease.path;
+      card.tree = { path: lease.path, lease_id: lease.lease_id, branch, base };
+      await writeJsonAtomic(cardFile(id), card);
+    } catch (e) {
+      // Hand the copy back before giving up: a lease nobody uses starves the pool.
+      await execCandidates(TREEHOUSE_CANDIDATES,
+        ['return', lease.path, '--force', '--if-lease-id', lease.lease_id], { cwd: repo }).catch(() => {});
+      card.state = 'failed-to-create';
+      card.error = `could not put the worktree on a task branch: ${e.message}`;
+      await writeJsonAtomic(cardFile(id), card);
+      die(`teammate: ${card.error}`);
+    }
+  }
+
+  const cwd = card.cwd;
+  await writeFile(briefFile(id), briefText({ id, task: body, cwd, status: statusFile(id), captainPane: me.pane, tree: card.tree }));
   await writeFile(statusFile(id), '');
 
   const env = [
@@ -311,6 +377,10 @@ async function cmdNew(argv) {
       ...env.flatMap((e) => ['--env', e]),
     ]);
   } catch (e) {
+    if (card.tree) {
+      await execCandidates(TREEHOUSE_CANDIDATES,
+        ['return', card.tree.path, '--force', '--if-lease-id', card.tree.lease_id], { cwd: card.repo }).catch(() => {});
+    }
     card.state = 'failed-to-create';
     card.error = e.message;
     await writeJsonAtomic(cardFile(id), card);
@@ -349,6 +419,7 @@ async function cmdNew(argv) {
 
   console.log(`${id}  tab ${card.tab_id}  pane ${card.pane_id}`);
   console.log(`  cwd    ${cwd}`);
+  if (card.tree) console.log(`  branch ${card.tree.branch}  (pooled worktree, lease ${card.tree.lease_id.slice(0, 8)})`);
   console.log(`  brief  ${briefFile(id)}`);
   console.log(`  status ${statusFile(id)}`);
   console.log(`\nNext: node bin\\teammate.mjs check`);
@@ -578,6 +649,17 @@ async function cmdClose(argv) {
         `then close with --force if you are sure.`);
   }
 
+  // A pooled worktree is wiped on return — refuse while anything uncommitted
+  // is still sitting in it, even if the worker already said done.
+  if (card.tree && !flags.force) {
+    const dirty = (await git(card.tree.path, 'status', '--porcelain').catch(() => '')).trim();
+    if (dirty) {
+      die(`teammate: ${id}'s worktree has uncommitted changes:\n` +
+          dirty.split('\n').slice(0, 10).map((l) => `    ${l}`).join('\n') +
+          `\nClosing would wipe them. Tell the worker to commit (teammate say), or --force to discard.`);
+    }
+  }
+
   const check = await assertStillOurs(card);
   if (!check.gone) {
     const tabs = (await herdr(['tab', 'list', '--workspace', card.workspace_id])).result?.tabs ?? [];
@@ -599,11 +681,36 @@ async function cmdClose(argv) {
     die(`teammate: asked herdr to close ${card.tab_id}, but pane ${card.pane_id} is still there. Card kept, nothing erased.`);
   }
 
+  // The tab is gone; give the copy back and note what landed on the branch.
+  // If the return fails the card stays open, and running close again retries
+  // just this part — the gone pane is skipped on the next pass.
+  if (card.tree) {
+    card.tab_closed_at = new Date().toISOString();
+    card.landed_commits = Number((await git(card.repo, 'rev-list', '--count',
+      `${card.tree.base}..${card.tree.branch}`).catch(() => 'NaN')).trim());
+    await writeJsonAtomic(cardFile(id), card);
+    try {
+      await execCandidates(TREEHOUSE_CANDIDATES,
+        ['return', card.tree.path, '--force', '--if-lease-id', card.tree.lease_id], { cwd: card.repo });
+    } catch (e) {
+      die(`teammate: tab closed, but the worktree was not returned to the pool (${e.message}).\n` +
+          `Run close again to retry. Card kept.`);
+    }
+  }
+
   card.state = 'closed';
   card.closed_at = new Date().toISOString();
   card.closed_saying = report.last?.raw ?? null;
   await writeJsonAtomic(cardFile(id), card);
   console.log(`${id} closed (${card.closed_saying ?? 'no final line'})`);
+  if (card.tree) {
+    if (card.landed_commits > 0) {
+      console.log(`${card.landed_commits} commit(s) landed on ${card.tree.branch} — pick them up with:`);
+      console.log(`  git merge ${card.tree.branch}   (then git branch -d ${card.tree.branch})`);
+    } else {
+      console.log(`warning: branch ${card.tree.branch} has no new commits — nothing landed.`);
+    }
+  }
 }
 
 // -------------------------------------------------------------------- plumbing
@@ -624,8 +731,10 @@ function parseFlags(argv, defaults) {
 
 const USAGE = `teammate — a worker agent in its own herdr tab
 
-  new "<task>" [--cwd <path>] [--file <brief.md>] [--model <name>] [--label <text>]
-                          open a tab in this window and start a worker on it
+  new "<task>" [--tree] [--cwd <path>] [--file <brief.md>] [--model <name>] [--label <text>]
+                          open a tab in this window and start a worker on it;
+                          --tree gives it its own pooled worktree (treehouse)
+                          on branch tm/<id> — only commits survive its closing
   list [--all] [--json]   every worker, its state and its last line
   check [--json]          one pass; exit code 1 if something wants the captain
   wait [--every S] [--timeout S]
