@@ -49,6 +49,8 @@ tm-0814-231502  tab w44:t5  pane w44:p5
   branch tm/tm-0814-231502  (pooled worktree, lease 3f6b0a1c)
   brief  ...\state\teammates\tm-0814-231502.brief.md
   status ...\state\teammates\tm-0814-231502.status
+
+Next: node bin\teammate.mjs check
 ```
 
 The card is written **before** the tab exists, so a crash mid-launch leaves
