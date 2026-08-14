@@ -139,7 +139,7 @@ function ago(ms) {
 }
 
 async function writeJsonAtomic(file, obj) {
-  const tmp = file + '.tmp';
+  const tmp = `${file}.${process.pid}.tmp`; // per-process, so parallel writers never share it
   await writeFile(tmp, JSON.stringify(obj, null, 2));
   await rename(tmp, file);
 }
@@ -301,8 +301,16 @@ async function cmdNew(argv) {
   const repo = path.resolve(flags.cwd ?? process.cwd());
   await mkdir(CREW_DIR, { recursive: true });
 
+  // Claim the id atomically ('wx' fails on an existing file) — two hires in
+  // the same second must never share a card.
   let id = `tm-${stamp()}`;
-  while (await readCard(id)) id = `tm-${stamp()}-${Math.random().toString(36).slice(2, 4)}`;
+  for (;;) {
+    try { await writeFile(cardFile(id), '{}', { flag: 'wx' }); break; }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      id = `tm-${stamp()}-${Math.random().toString(36).slice(2, 4)}`;
+    }
+  }
 
   // The record is written before the tab exists, so a crash mid-launch leaves a
   // traceable card rather than an orphan tab nobody owns.
@@ -389,9 +397,19 @@ async function cmdNew(argv) {
 
   card.tab_id = created.result?.tab?.tab_id ?? null;
   card.pane_id = created.result?.root_pane?.pane_id ?? null;
+  if (!card.pane_id || !card.tab_id) {
+    // A tab we cannot name is a tab we cannot manage — hand the copy back too.
+    if (card.tree) {
+      await execCandidates(TREEHOUSE_CANDIDATES,
+        ['return', card.tree.path, '--force', '--if-lease-id', card.tree.lease_id], { cwd: card.repo }).catch(() => {});
+    }
+    card.state = 'failed-to-create';
+    card.error = 'herdr created a tab but did not name it';
+    await writeJsonAtomic(cardFile(id), card);
+    die(`teammate: herdr created a tab but did not name it — the tab may need closing by hand. Card ${id} kept as a record.`);
+  }
   card.state = 'launching';
   await writeJsonAtomic(cardFile(id), card);
-  if (!card.pane_id || !card.tab_id) die(`teammate: herdr created a tab but did not name it. Card ${id} kept as a record.`);
 
   // Wait for the shell to be up before typing into it: text sent to a pane that
   // has no prompt yet is simply lost.
@@ -570,8 +588,9 @@ async function cmdWait(argv) {
       process.exitCode = 1;
       return;
     }
-    if (Date.now() + every > until) { console.log('nothing wanted the captain before the timeout'); process.exitCode = 3; return; }
-    await sleep(every);
+    const left = until - Date.now();
+    if (left <= 0) { console.log('nothing wanted the captain before the timeout'); process.exitCode = 3; return; }
+    await sleep(Math.min(every, left)); // the last sleep is the remainder, then one final pass at the deadline
   }
 }
 
@@ -594,25 +613,58 @@ async function cmdLog(argv) {
 // ------------------------------------------------------------------- talk back
 
 async function cmdSay(argv) {
-  const flags = parseFlags(argv, {});
+  const flags = parseFlags(argv, { steal: false });
   const id = flags._.shift();
   const text = flags._.join(' ').trim();
   const card = id && await readCard(id);
-  if (!card || !text) die('teammate say <id> "<what to tell the worker>"');
+  if (!card || !text) die('teammate say <id> "<what to tell the worker>" [--steal]');
   if (card.state === 'closed') die(`teammate: ${id} is closed.`);
   if (!card.pane_id) die(`teammate: ${id} has no pane recorded.`);
+  await assertCallerMay(card, flags);
   if ((await assertStillOurs(card)).gone) die(`teammate: ${id}'s pane is gone — there is nobody to tell.`);
   await herdr(['agent', 'prompt', card.pane_id, text]);
   await appendFile(statusFile(id), `captain: ${text.replace(/\s+/g, ' ').slice(0, 200)}\n`);
   console.log(`sent to ${id} (${card.pane_id})`);
 }
 
+// say and close are the captain's verbs. A pane that is itself an open worker
+// may use neither, and a herdr pane other than the hiring captain must take
+// the worker over explicitly. A plain terminal outside herdr is the human.
+async function assertCallerMay(card, flags) {
+  const invoker = process.env.HERDR_PANE_ID ?? null;
+  if (!invoker) return;
+  const asWorker = (await allCards()).find((c) => c.pane_id === invoker && c.state !== 'closed');
+  if (asWorker) die(`teammate: this pane is itself worker ${asWorker.id}. Workers do not steer or fire workers.`);
+  if (card.captain?.pane_id && invoker !== card.captain.pane_id && !flags.steal) {
+    die(`teammate: ${card.id} was hired from pane ${card.captain.pane_id}, not this one (${invoker}).\n` +
+        `Add --steal to take the worker over.`);
+  }
+}
+
 // ---------------------------------------------------------------- closing down
+
+// A pooled worktree is wiped on return — refuse while anything uncommitted is
+// still sitting in it, even after a done line. And fail closed: a git error is
+// not a clean tree, it is "cannot tell", and cannot-tell never wipes anything.
+async function assertTreeClean(card, flags, tail) {
+  if (!card.tree || flags.force) return;
+  let dirty;
+  try { dirty = (await git(card.tree.path, 'status', '--porcelain')).trim(); }
+  catch (e) {
+    die(`teammate: cannot check ${card.id}'s worktree for uncommitted changes (${e.message}).\n` +
+        `Refusing to close; --force to discard whatever is there.`);
+  }
+  if (dirty) {
+    die(`teammate: ${card.id}'s worktree has uncommitted changes:\n` +
+        dirty.split('\n').slice(0, 10).map((l) => `    ${l}`).join('\n') + `\n${tail}`);
+  }
+}
 
 // The pane we recorded must still be the same pane: same window, same tab, same
 // working directory. If any of that drifted, something else lives there now and
 // we do not touch it.
 async function assertStillOurs(card) {
+  if (!card.pane_id) return { gone: true }; // never got a pane — nothing to protect
   let pane;
   try { pane = (await herdr(['pane', 'get', card.pane_id])).result?.pane; }
   catch (e) {
@@ -629,11 +681,12 @@ async function assertStillOurs(card) {
 }
 
 async function cmdClose(argv) {
-  const flags = parseFlags(argv, { force: false });
+  const flags = parseFlags(argv, { force: false, steal: false });
   const id = flags._[0];
   const card = id && await readCard(id);
-  if (!card) die('teammate close <id> [--force]');
+  if (!card) die('teammate close <id> [--force] [--steal]');
   if (card.state === 'closed') return console.log(`${id} is already closed`);
+  await assertCallerMay(card, flags);
 
   // Never close the hand that runs us.
   if (card.pane_id === process.env.HERDR_PANE_ID || card.tab_id === process.env.HERDR_TAB_ID) {
@@ -648,17 +701,12 @@ async function cmdClose(argv) {
         `  node bin\\teammate.mjs log ${id}\n` +
         `then close with --force if you are sure.`);
   }
-
-  // A pooled worktree is wiped on return — refuse while anything uncommitted
-  // is still sitting in it, even if the worker already said done.
-  if (card.tree && !flags.force) {
-    const dirty = (await git(card.tree.path, 'status', '--porcelain').catch(() => '')).trim();
-    if (dirty) {
-      die(`teammate: ${id}'s worktree has uncommitted changes:\n` +
-          dirty.split('\n').slice(0, 10).map((l) => `    ${l}`).join('\n') +
-          `\nClosing would wipe them. Tell the worker to commit (teammate say), or --force to discard.`);
-    }
+  if (!flags.force && report.last?.answered) {
+    die(`teammate: ${id} said "${report.last.raw}", but the captain replied after that —\n` +
+        `the worker may be mid-follow-up. Wait for its next line, or --force.`);
   }
+
+  await assertTreeClean(card, flags, 'Closing would wipe them. Tell the worker to commit (teammate say), or --force to discard.');
 
   const check = await assertStillOurs(card);
   if (!check.gone) {
@@ -671,7 +719,7 @@ async function cmdClose(argv) {
 
   // Erase the record only once herdr itself says the pane is not there. Any
   // other answer — including a confusing one — leaves the card intact.
-  let confirmed = false;
+  let confirmed = !card.pane_id; // a card that never got a pane has nothing to wait for
   for (let i = 0; i < 10 && !confirmed; i++) {
     await sleep(300);
     try { await herdr(['pane', 'get', card.pane_id]); }
@@ -689,6 +737,10 @@ async function cmdClose(argv) {
     card.landed_commits = Number((await git(card.repo, 'rev-list', '--count',
       `${card.tree.base}..${card.tree.branch}`).catch(() => 'NaN')).trim());
     await writeJsonAtomic(cardFile(id), card);
+    // The worker is provably dead now, so this second look is race-free: edits
+    // it made after the first check would otherwise be wiped unseen.
+    await assertTreeClean(card, flags,
+      `The tab is closed but the files are still in ${card.tree.path} — salvage them, then close again with --force.`);
     try {
       await execCandidates(TREEHOUSE_CANDIDATES,
         ['return', card.tree.path, '--force', '--if-lease-id', card.tree.lease_id], { cwd: card.repo });
@@ -742,6 +794,9 @@ const USAGE = `teammate — a worker agent in its own herdr tab
   log <id> [--lines N]    the worker's own lines, plus its screen
   say <id> "<text>"       send more instructions into the same session
   close <id> [--force]    close exactly that tab, once the work has landed
+
+say and close belong to the captain that hired: a worker pane may use neither,
+and a different herdr pane must add --steal to take a worker over.
 
 State lives in state/teammates/ — one card, one brief, one status file each.`;
 

@@ -136,7 +136,7 @@ done: docs/teammate.md written and verified
 ...
 ```
 
-### `say <id> "<text>"`
+### `say <id> "<text>" [--steal]`
 
 Sends more instructions into the same session — the worker keeps all its
 context. The message also lands in the status file as a `captain:` line,
@@ -144,27 +144,37 @@ which keeps the exchange readable in one place and acknowledges a
 `needs-decision` or `blocked` line, so `check` goes quiet until the worker
 speaks again.
 
+`say` and `close` belong to the captain that hired: a pane that is itself an
+open worker may use neither, and a different herdr pane must add `--steal`
+to take the worker over. A plain terminal outside herdr is the human and may
+always speak.
+
 ```
 > node bin\teammate.mjs say tm-0814-223149 "Keep it in English and match the tone of docs/herdr-api.md."
 sent to tm-0814-223149 (w44:p4)
 ```
 
-### `close <id> [--force]`
+### `close <id> [--force] [--steal]`
 
 Closes exactly that tab, once the work has landed. Without `--force` it
 refuses unless the worker's last line is `done` or `failed` — the work may
-be unfinished and unsaved, read it first. If the pane already vanished on
-its own, `close` retires the card (after herdr confirms — see the refusals
-below).
+be unfinished and unsaved, read it first. It also refuses when the captain
+`say`-ed something *after* that final line: the worker may be mid-follow-up,
+wait for its next line. If the pane already vanished on its own, `close`
+retires the card (after herdr confirms — see the refusals below).
 
 A `--tree` worker gets one more refusal: the pooled copy is wiped on
 return, so `close` refuses while the worktree holds uncommitted changes —
 even after a `done:` line. Tell the worker to commit (`say`), or `--force`
-to discard them. Only once herdr confirms the pane gone does the copy go
-back to the pool, and `close` reports how many commits landed on the
-branch, with the merge hint — or a warning when the branch holds nothing.
-If the return itself fails, the card stays open and running `close` again
-retries just that part; the already-gone pane is skipped.
+to discard them. The check fails closed: a git error is not a clean tree
+but "cannot tell", and cannot-tell never wipes anything. Once herdr
+confirms the pane gone the tree is checked a second time — the worker is
+provably dead by then, so edits it slipped in during closing are caught
+too, and the files are still in the copy for salvage. Only then does the
+copy go back to the pool, and `close` reports how many commits landed on
+the branch, with the merge hint — or a warning when the branch holds
+nothing. If the return itself fails, the card stays open and running
+`close` again retries just that part; the already-gone pane is skipped.
 
 ```
 > node bin\teammate.mjs close tm-0814-223149
@@ -223,7 +233,7 @@ first action, a line at every real change of situation, and exactly one
 captain reads the work, may `say` more into the same session, and closes
 the tab itself.
 
-## The three refusals
+## The four refusals
 
 What keeps this safe to run unattended:
 
@@ -234,15 +244,23 @@ What keeps this safe to run unattended:
    authority — it acts only on ids herdr gave it. A pane that is itself an
    open worker is refused too: workers do not hire workers.
 
-2. **It will not close a tab it cannot prove is still the one it created.**
+2. **It will not take orders from the wrong pane.** `say` and `close` are
+   the hiring captain's verbs: a pane that is itself an open worker may use
+   neither (workers do not steer or fire workers), and any other herdr pane
+   must add `--steal` to take a worker over. A plain terminal outside herdr
+   is the human, who may always speak.
+
+3. **It will not close a tab it cannot prove is still the one it created.**
    Before `say` or `close`, the pane on record must still sit in the same
    tab, the same window, the same working directory. If any of that
    drifted, something else lives there now and it is not touched. On top
    of that, `close` refuses the captain's own pane and refuses the last
    tab of a window — closing it would close the whole window.
 
-3. **It will not erase a record until herdr answers `pane_not_found`.**
+4. **It will not erase a record until herdr answers `pane_not_found`.**
    After asking herdr to close the tab, it polls `pane get` and marks the
    card closed only when herdr returns that exact error code. Any other
    answer — including a confusing one — leaves the card intact, so a
-   half-closed tab can never turn into an untracked one.
+   half-closed tab can never turn into an untracked one. A `--tree` copy is
+   returned to the pool only after this confirmation, and only clean —
+   uncommitted leftovers keep the card open and the files salvageable.
