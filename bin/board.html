@@ -648,19 +648,23 @@
   .datum.age span.vhot { color: var(--blocked); }
 
   /* Compact Idle flight strips. */
-  .flight-card.compact { min-height: 39px; }
+  /* Compact idle strips: thin content-first rows. The direction color moves to
+     a left rail, and the action buttons only appear on hover — 40+ resting rows
+     must read as a list of names, not as a wall of controls. */
+  .flight-card.compact { min-height: 26px; }
+  .flight-card.compact::before { inset: 0 auto 0 0; width: 3px; height: auto; }
   .compact-grid {
-    min-height: 39px;
+    min-height: 26px;
     display: grid;
-    grid-template-columns: 18px 27px minmax(0, 1fr) auto auto auto;
+    grid-template-columns: 16px 26px minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 5px;
     min-width: 0;
-    padding: 5px 5px 5px 4px;
+    padding: 2px 6px 2px 6px;
   }
   .expand-mini {
     width: 18px;
-    height: 25px;
+    height: 20px;
     display: grid;
     place-items: center;
     padding: 0;
@@ -691,7 +695,7 @@
   }
   .compact-repo {
     display: block;
-    margin-top: 3px;
+    margin-top: 1px;
     overflow: hidden;
     color: #536779;
     font-family: var(--telemetry);
@@ -727,9 +731,28 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .compact-actions { display: flex; gap: 2px; }
+  .compact-actions {
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
+    display: none;
+    gap: 2px;
+    padding: 2px 3px;
+    background: #101b26;
+    border: 1px solid #33475a;
+    z-index: 2;
+  }
+  .flight-card.compact:hover .compact-actions,
+  .flight-card.compact:focus-within .compact-actions { display: flex; }
   .compact-actions .control { width: 18px; min-width: 18px; height: 18px; padding: 0; font-size: 7px; }
   .compact-actions .control.confirm { width: auto; padding: 0 3px; }
+
+  /* Controls with no value set are shadows until the pointer arrives. */
+  .control.unset { opacity: .28; }
+  .flight-card:hover .control.unset,
+  .person-row:hover .control.unset,
+  .misc-row:hover .control.unset { opacity: 1; }
 
   /* Team roster and unrecognized-window manifest. */
   .list-shell {
@@ -1021,7 +1044,7 @@
     .control { min-width: 21px; height: 21px; padding-inline: 3px; font-size: 7px; }
     .control-rack { padding-left: 0; }
     .alarm-annunciator { font-size: 8px; letter-spacing: .06em; }
-    .compact-grid { grid-template-columns: 16px 24px minmax(0, 1fr) auto; gap: 3px; }
+    .compact-grid { grid-template-columns: 16px 24px minmax(0, 1fr); gap: 3px; }
     .compact-age { display: none; }
     .compact-signals { display: none; }
     .expand-mini { width: 16px; }
@@ -1214,15 +1237,15 @@ function focusControl() {
 }
 
 function starControl(card, extraClass) {
-  return `<button type="button" class="control star-control ${card.star ? 'star-on' : ''} ${extraClass || ''}" data-cwd="${esc(card.cwd)}" data-star="${card.star ? '1' : ''}" title="Star: must not stop">${card.star ? '★' : '☆'}</button>`;
+  return `<button type="button" class="control star-control ${card.star ? 'star-on' : 'unset'} ${extraClass || ''}" data-cwd="${esc(card.cwd)}" data-star="${card.star ? '1' : ''}" title="Star: must not stop">${card.star ? '★' : '☆'}</button>`;
 }
 
 function prioControl(card, extraClass) {
-  return `<button type="button" class="control prio-control ${String(card.prio || '').toLowerCase()} ${extraClass || ''}" data-cwd="${esc(card.cwd)}" data-prio="${esc(card.prio || '')}" title="Click to change priority">${esc(card.prio || '·')}</button>`;
+  return `<button type="button" class="control prio-control ${String(card.prio || '').toLowerCase()} ${card.prio ? '' : 'unset'} ${extraClass || ''}" data-cwd="${esc(card.cwd)}" data-prio="${esc(card.prio || '')}" title="Click to change priority">${esc(card.prio || '·')}</button>`;
 }
 
 function kindControl(card) {
-  return `<button type="button" class="control kind-control ${card.kind ? `kind-${esc(card.kind)}` : ''}" data-cwd="${esc(card.cwd)}" data-kind="${esc(card.kind || '')}" title="Kind: temporary (⏱), ongoing (∞) or cron-driven (↻)">${KIND_LABEL[card.kind] || '·'}</button>`;
+  return `<button type="button" class="control kind-control ${card.kind ? `kind-${esc(card.kind)}` : 'unset'}" data-cwd="${esc(card.cwd)}" data-kind="${esc(card.kind || '')}" title="Kind: temporary (⏱), ongoing (∞) or cron-driven (↻)">${KIND_LABEL[card.kind] || '·'}</button>`;
 }
 
 function controlRack(card, allowCollapse) {
