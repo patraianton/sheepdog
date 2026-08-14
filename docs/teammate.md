@@ -33,7 +33,7 @@ Next: node bin\teammate.mjs check
 folder. teammate leases a copy of the repository from treehouse (a
 non-interactive `treehouse get --lease`; `--cwd` names the repository, the
 worker's directory becomes the copy) and puts it on a fresh branch
-`tm/<id>` created from the captain's current commit — so parallel workers
+named after the worker (`tm-…`) created from the captain's current commit — so parallel workers
 never collide on files, and their work meets only when the captain merges
 the branches. The copy is wiped and returned to the pool at close, so the
 worker's brief grows one extra section: your folder is a temporary copy,
@@ -46,7 +46,7 @@ back at once, because a lease nobody uses starves the pool.
 > node bin\teammate.mjs new "Fix the flaky date test" --tree
 tm-0814-231502  tab w44:t5  pane w44:p5
   cwd    C:\Users\panto\.treehouse\teammate-1cffa2\2\teammate
-  branch tm/tm-0814-231502  (pooled worktree, lease 3f6b0a1c)
+  branch tm-0814-231502  (pooled worktree, lease 3f6b0a1c)
   brief  ...\state\teammates\tm-0814-231502.brief.md
   status ...\state\teammates\tm-0814-231502.status
 
@@ -172,8 +172,8 @@ tm-0814-223149 closed (done: docs/teammate.md written and verified)
 
 > node bin\teammate.mjs close tm-0814-231502
 tm-0814-231502 closed (done: test fixed, three commits on the branch)
-3 commit(s) landed on tm/tm-0814-231502 — pick them up with:
-  git merge tm/tm-0814-231502   (then git branch -d tm/tm-0814-231502)
+3 commit(s) landed on tm-0814-231502 — pick them up with:
+  git merge tm-0814-231502   (then git branch -d tm-0814-231502)
 ```
 
 ## What a card holds
@@ -187,7 +187,7 @@ tm-0814-231502 closed (done: test fixed, three commits on the branch)
 | `error` | why creating or launching failed — the reason `check` shows |
 | `cwd` | where the worker works — with `--tree`, the leased copy |
 | `repo` | with `--tree`: the repository the copy was taken from |
-| `tree` | with `--tree`: the pooled worktree — `path`, `lease_id`, `branch` (`tm/<id>`) and `base`, the captain's commit the branch grew from |
+| `tree` | with `--tree`: the pooled worktree — `path`, `lease_id`, `branch` (the worker's own id) and `base`, the captain's commit the branch grew from |
 | `captain` | pane, tab and workspace ids of the pane that ran `new` |
 | `workspace_id`, `tab_id`, `pane_id` | the worker's own window, tab and pane, as named by herdr |
 | `label`, `model` | the tab label; a model override, if any |

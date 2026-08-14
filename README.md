@@ -103,7 +103,7 @@ after herdr answers that the pane is gone.
 
 With `--tree`, the worker also gets its own pooled git worktree: teammate
 leases a copy of the repository from treehouse and puts it on a fresh branch
-`tm/<id>` cut from the captain's current commit, so parallel workers never
+named after the worker (`tm-…`) cut from the captain's current commit, so parallel workers never
 collide on files. The copy is wiped when it goes back to the pool at close —
 only commits survive — so `close` refuses while uncommitted changes sit in it,
 then reports how many commits landed on the branch and how to merge them.

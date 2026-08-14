@@ -338,7 +338,7 @@ async function cmdNew(argv) {
     }
     try {
       const base = (await git(repo, 'rev-parse', 'HEAD')).trim();
-      const branch = `tm/${id}`;
+      const branch = id; // the branch simply carries the worker's name
       await git(lease.path, 'switch', '-c', branch, base);
       card.repo = repo;
       card.cwd = lease.path;
@@ -734,7 +734,7 @@ const USAGE = `teammate — a worker agent in its own herdr tab
   new "<task>" [--tree] [--cwd <path>] [--file <brief.md>] [--model <name>] [--label <text>]
                           open a tab in this window and start a worker on it;
                           --tree gives it its own pooled worktree (treehouse)
-                          on branch tm/<id> — only commits survive its closing
+                          on a branch named after it — only commits survive
   list [--all] [--json]   every worker, its state and its last line
   check [--json]          one pass; exit code 1 if something wants the captain
   wait [--every S] [--timeout S]
