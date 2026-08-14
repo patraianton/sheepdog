@@ -51,7 +51,10 @@
     position: relative;
     z-index: 5;
     display: grid;
-    grid-template-columns: auto auto minmax(150px, 1fr) auto;
+    /* The readout is sized by its own text; the chip strip takes what is left
+       and wraps inside it — so a crowded deck costs a chip row, not the
+       timestamp at the end of the readout. */
+    grid-template-columns: auto auto auto minmax(0, 1fr);
     grid-template-areas:
       "brand views readout filters";
     align-items: center;
@@ -62,6 +65,14 @@
     background: linear-gradient(180deg, #121c28 0%, #0c141d 100%);
     box-shadow: 0 8px 24px #0008;
   }
+  /* Team and Other carry no direction chips. Their row leaves the deck
+     altogether — an empty track still costs its gap, and that gap read as a
+     blank band under the tabs. */
+  .command-deck.no-filters {
+    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-areas: "brand views readout";
+  }
+  #filters:empty { display: none; }
   .brand {
     grid-area: brand;
     min-width: 120px;
@@ -170,15 +181,21 @@
   #filters {
     grid-area: filters;
     display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
     justify-content: flex-end;
     gap: 4px;
     min-width: 0;
   }
+  /* Chips never shrink below their own label: they wrap to another row
+     instead, and a label too long even for a whole row ends in an ellipsis. */
   .filter-key {
     height: 28px;
     display: inline-flex;
+    flex: none;
     align-items: center;
     gap: 6px;
+    max-width: 100%;
     min-width: 0;
     padding: 3px 7px;
     border: 1px solid var(--line);
@@ -196,6 +213,12 @@
   .filter-key:hover { color: var(--ink); border-color: var(--line-hot); }
   .filter-key.on { color: var(--ink); background: #1b2a39; border-color: #526a80; }
   .filter-key .lamp { width: 4px; height: 14px; flex: none; background: var(--dir, var(--ink-dim)); }
+  .filter-key .filter-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   #board {
     min-width: 0;
@@ -260,8 +283,10 @@
     font-weight: 900;
   }
   .column-title { min-width: 0; }
+  /* A narrow column wraps the title to a second line instead of dropping the
+     two words that carry the meaning ("BLOCKED — NEEDS YOU"). */
   .column-title strong {
-    display: block;
+    display: -webkit-box;
     overflow: hidden;
     color: var(--ink);
     font-family: var(--ui);
@@ -269,9 +294,10 @@
     font-weight: 900;
     letter-spacing: .055em;
     line-height: 1.1;
-    text-overflow: ellipsis;
+    overflow-wrap: anywhere;
     text-transform: uppercase;
-    white-space: nowrap;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
   .column-title small {
     display: block;
@@ -317,7 +343,9 @@
     box-shadow: 0 4px 12px #0005;
     cursor: pointer;
   }
-  .flight-card::before {
+  /* The direction accent sits on the card body, not on the card, so a focused
+     card's cyan banner keeps its own top edge instead of being painted over. */
+  .card-body::before {
     content: "";
     position: absolute;
     z-index: 1;
@@ -337,6 +365,8 @@
     box-shadow: 0 0 0 1px #78ddff, 0 0 25px #3cbde83d;
   }
   .focus-banner {
+    position: relative;
+    z-index: 2;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -361,7 +391,7 @@
     white-space: nowrap;
   }
 
-  .card-body { padding: 7px; }
+  .card-body { position: relative; padding: 7px; }
   .card-head {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -643,6 +673,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The last column is flush with the card edge — its value must be too,
+     otherwise the number hangs to the left of its own label. */
+  .datum.age { text-align: right; }
   .datum.vector span { color: color-mix(in srgb, var(--dir-color) 68%, #fff); }
   .datum.age span.hot { color: var(--done); }
   .datum.age span.vhot { color: var(--blocked); }
@@ -652,7 +685,13 @@
      a left rail, and the action buttons only appear on hover — 40+ resting rows
      must read as a list of names, not as a wall of controls. */
   .flight-card.compact { min-height: 26px; }
-  .flight-card.compact::before { inset: 0 auto 0 0; width: 3px; height: auto; }
+  .flight-card.compact::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--dir-color);
+  }
   .compact-grid {
     min-height: 26px;
     display: grid;
@@ -693,8 +732,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The base line is always there, empty or not: with it, every name in the
+     column sits on the same baseline instead of riding 4px high on the rows
+     that happen to carry a repo. It costs no height — the row keeps its 26px. */
   .compact-repo {
     display: block;
+    min-height: 8px;
     margin-top: 1px;
     overflow: hidden;
     color: #536779;
@@ -703,7 +746,20 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Signals and hover controls share one right-hand bay. Only one of them is
+     shown at a time, so arriving with the pointer costs a few pixels of
+     reflow — never a name covered mid-letter by a floating panel. */
+  .compact-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+  }
   .compact-signals { display: flex; align-items: center; gap: 3px; }
+  /* Flag, star and priority keep fixed slots at the right of the group, so the
+     priority chip forms a column you can run your eye down; the rare signals
+     (lavish, retire) grow to the left of them. */
+  .signal.slot-empty { visibility: hidden; }
   .signal {
     min-width: 18px;
     height: 17px;
@@ -721,8 +777,11 @@
   .signal.retiring { color: var(--violet); border-color: #5b4c78; }
   .signal.lavish { color: #f2a7e3; border-color: #86407c; cursor: pointer; }
   .signal.lavish:hover { color: #ffd1f4; border-color: #d668c4; }
+  /* Fixed width, not "as wide as the text": a row reading "24 min" must not
+     shove its own signal chips out of the column the other rows keep. */
   .compact-age {
-    min-width: 24px;
+    width: 34px;
+    min-width: 34px;
     overflow: hidden;
     color: #687b8d;
     font-family: var(--telemetry);
@@ -731,18 +790,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .compact-actions {
-    position: absolute;
-    top: 50%;
-    right: 4px;
-    transform: translateY(-50%);
-    display: none;
-    gap: 2px;
-    padding: 2px 3px;
-    background: #101b26;
-    border: 1px solid #33475a;
-    z-index: 2;
-  }
+  .compact-actions { display: none; align-items: center; gap: 2px; }
+  .flight-card.compact:hover .compact-signals,
+  .flight-card.compact:focus-within .compact-signals { display: none; }
   .flight-card.compact:hover .compact-actions,
   .flight-card.compact:focus-within .compact-actions { display: flex; }
   .compact-actions .control { width: 18px; min-width: 18px; height: 18px; padding: 0; font-size: 7px; }
@@ -804,10 +854,13 @@
     cursor: pointer;
   }
   .person-row.focused { border-color: var(--focus); box-shadow: inset 0 0 0 1px #78ddff66; }
+  /* The name column is a fixed width, not a share of the row: every row is its
+     own grid, so a share would make the state line start at a different place
+     on every person. Fixed width = one straight column down the roster. */
   .person-top {
     min-height: 52px;
     display: grid;
-    grid-template-columns: 22px 35px minmax(95px, .65fr) minmax(140px, 1.5fr) auto;
+    grid-template-columns: 22px 35px 170px minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
     min-width: 0;
@@ -869,6 +922,15 @@
     justify-content: flex-end;
     gap: 5px;
     white-space: nowrap;
+  }
+  /* The two round controls keep their slot even on a person with no herdr
+     window, so the counters end on the same line for everybody. */
+  .person-controls {
+    display: flex;
+    flex: none;
+    justify-content: flex-end;
+    gap: 5px;
+    min-width: 51px;
   }
   .roster-counter {
     min-height: 25px;
@@ -965,7 +1027,11 @@
     cursor: pointer;
   }
   .misc-row.focused { border-color: var(--focus); }
+  /* The number plate is the row's left rail: it runs the full height of the
+     row, so on a stacked layout the rule under the name starts where the rail
+     ends instead of leaving the corner beside it unruled. */
   .misc-state {
+    grid-row: 1 / -1;
     display: grid;
     place-items: center;
     border-right: 1px solid color-mix(in srgb, var(--state) 55%, #263747);
@@ -1044,14 +1110,18 @@
     .control { min-width: 21px; height: 21px; padding-inline: 3px; font-size: 7px; }
     .control-rack { padding-left: 0; }
     .alarm-annunciator { font-size: 8px; letter-spacing: .06em; }
-    .compact-grid { grid-template-columns: 16px 24px minmax(0, 1fr); gap: 3px; }
-    .compact-age { display: none; }
-    .compact-signals { display: none; }
+    /* A narrow column tightens the strip, it does not empty it: the flag, the
+       star, the priority and the age stay — only the reserved empty slots are
+       given up, so the signals pack tight and the name takes the ellipsis. */
+    .compact-grid { grid-template-columns: 16px 22px minmax(0, 1fr) auto auto; gap: 3px; }
+    .signal { min-width: 15px; height: 15px; padding: 0 2px; }
+    .signal.slot-empty { display: none; }
+    .compact-signals { gap: 2px; }
+    .compact-age { width: 28px; min-width: 28px; font-size: 6.5px; }
     .expand-mini { width: 16px; }
   }
 
   @container (max-width: 230px) {
-    .column-title small { display: none; }
     .column-head { min-height: 49px; }
     .identity { grid-template-columns: 27px minmax(0, 1fr); gap: 5px; }
     .tail-number { width: 27px; min-height: 25px; }
@@ -1069,12 +1139,28 @@
     .person-right { grid-column: 4; grid-row: 1; }
     .person-details { grid-template-columns: 1fr; }
     .team-mini-stack { grid-template-columns: 1fr; }
-    .misc-row { grid-template-columns: 39px minmax(0, 1fr) auto; }
+    /* The rows are spelled out so the number plate can span them all. */
+    .misc-row { grid-template-columns: 39px minmax(0, 1fr) auto; grid-template-rows: auto auto; }
     .misc-content { grid-column: 2 / -1; border-top: 1px solid #263747; }
     .misc-meta { grid-column: 3; grid-row: 1; }
+    /* One seam between the name and the meta bay, not two touching borders. */
+    .misc-identity { border-right: 0; }
   }
 
-  @media (max-width: 1120px) {
+  /* Below this the counters and controls no longer fit beside the name: they
+     take a line of their own instead of being pushed off the window edge. */
+  @container (max-width: 560px) {
+    .person-top { grid-template-columns: 20px 31px minmax(0, 1fr); gap: 6px; padding-inline: 6px; }
+    .person-status { width: 30px; height: 30px; }
+    .person-info { grid-column: 1 / -1; grid-row: 2; padding-bottom: 0; }
+    .person-right { grid-column: 1 / -1; grid-row: 3; justify-content: flex-start; flex-wrap: wrap; }
+    .person-controls { justify-content: flex-start; min-width: 0; }
+  }
+
+  /* One-row deck only while brand + tabs + full readout + every chip fit
+     side by side (measured need: ~1445px). Below that the deck stacks, so
+     the readout keeps its whole line and the chips get a row of their own. */
+  @media (max-width: 1460px) {
     .command-deck {
       grid-template-columns: auto minmax(0, 1fr);
       grid-template-areas:
@@ -1082,8 +1168,14 @@
         "views views"
         "filters filters";
     }
+    .command-deck.no-filters {
+      grid-template-areas:
+        "brand readout"
+        "views views";
+    }
     #views { width: min(100%, 390px); }
-    #filters { justify-content: flex-start; overflow-x: auto; padding-bottom: 1px; }
+    .view-tab { flex: 1; justify-content: center; }
+    #filters { justify-content: flex-start; }
   }
   @media (max-width: 650px) {
     .command-deck {
@@ -1091,6 +1183,7 @@
       grid-template-areas: "brand" "views" "readout" "filters";
       gap: 7px;
     }
+    .command-deck.no-filters { grid-template-areas: "brand" "views" "readout"; }
     .brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
     .brand small { margin: 0; }
     #views { width: 100%; }
@@ -1107,12 +1200,9 @@
     .view-tab { padding-inline: 4px; font-size: 9px; }
     .view-tab .count { min-width: 19px; }
     .filter-key { font-size: 8px; padding-inline: 5px; }
-    .person-top { grid-template-columns: 20px 31px minmax(0, 1fr); gap: 5px; padding-inline: 5px; }
-    .person-status { width: 30px; height: 30px; }
-    .person-right { grid-column: 3; grid-row: 2; justify-content: flex-start; flex-wrap: wrap; }
-    .person-info { grid-column: 1 / -1; grid-row: 3; }
+    .person-top { gap: 5px; padding-inline: 5px; }
     .roster-counter { padding-inline: 5px; }
-    .misc-row { grid-template-columns: 34px minmax(0, 1fr); }
+    .misc-row { grid-template-columns: 34px minmax(0, 1fr); grid-template-rows: auto auto auto; }
     .misc-meta { grid-column: 2; grid-row: 2; justify-content: flex-start; border-top: 1px solid #263747; border-left: 0; }
     .misc-content { grid-column: 2; grid-row: 3; }
   }
@@ -1158,7 +1248,9 @@ const STATE = {
 const PRIO_NEXT = { P1: 'P2', P2: 'P3', P3: 'P1', '': 'P1' };
 const PRIO_RANK = { P1: 0, P2: 1, P3: 2 };
 const KIND_NEXT = { '': 'temp', temp: 'ongoing', ongoing: 'cron', cron: '' };
-const KIND_LABEL = { temp: '⏱', ongoing: '∞', cron: '↻' };
+// Glyphs must exist in the monospace stack, otherwise the browser substitutes
+// a colour emoji at the wrong size (⏱ came out as a blue smudge).
+const KIND_LABEL = { temp: '⧗', ongoing: '∞', cron: '↻' };
 const VIEWS = ['mine', 'team', 'other'];
 const VIEW_LABELS = { mine: 'Mine', team: 'Team', other: 'Other' };
 const PULSE_MS = 15 * 60 * 1000;
@@ -1206,6 +1298,26 @@ function isAlarm(card) {
   return Boolean(card.star && card.status !== 'working' && !card.remote && !hasPulse(card));
 }
 
+// Two names say the same thing when one is contained in the other — the
+// second line of a row must add something, not echo the first.
+function sameName(a, b) {
+  const normalize = value => String(value ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const x = normalize(a);
+  const y = normalize(b);
+  if (!x || !y) return false;
+  return x === y || (Math.min(x.length, y.length) >= 4 && (x.includes(y) || y.includes(x)));
+}
+
+// The small line under an unrecognized window: the parent repo if it adds
+// something, else the window label, else the herdr tab id — never the name
+// that is already printed in bold above it.
+function subText(card) {
+  const repo = repoText(card);
+  if (repo) return repo;
+  if (card.wsLabel && !sameName(card.wsLabel, card.label)) return card.wsLabel;
+  return card.tabId || '';
+}
+
 // "lane-1 / my-project": a branch window shows its parent project
 // unless the name already sounds in the card or window label.
 function repoText(card) {
@@ -1233,7 +1345,7 @@ function powerControl(card) {
 // Focus glyph: carries no handler of its own — the click bubbles to the
 // enclosing [data-tab] element, which jumps to the herdr tab.
 function focusControl() {
-  return `<button type="button" class="control focus-control" title="Jump to this herdr tab">⌖</button>`;
+  return `<button type="button" class="control focus-control" title="Jump to this herdr tab">⊕</button>`;
 }
 
 function starControl(card, extraClass) {
@@ -1245,7 +1357,7 @@ function prioControl(card, extraClass) {
 }
 
 function kindControl(card) {
-  return `<button type="button" class="control kind-control ${card.kind ? `kind-${esc(card.kind)}` : 'unset'}" data-cwd="${esc(card.cwd)}" data-kind="${esc(card.kind || '')}" title="Kind: temporary (⏱), ongoing (∞) or cron-driven (↻)">${KIND_LABEL[card.kind] || '·'}</button>`;
+  return `<button type="button" class="control kind-control ${card.kind ? `kind-${esc(card.kind)}` : 'unset'}" data-cwd="${esc(card.cwd)}" data-kind="${esc(card.kind || '')}" title="Kind: temporary (⧗), ongoing (∞) or cron-driven (↻)">${KIND_LABEL[card.kind] || '·'}</button>`;
 }
 
 function controlRack(card, allowCollapse) {
@@ -1317,12 +1429,14 @@ function compactCard(card, options = {}) {
   const retire = data.retire?.[card.tabId];
   const repo = repoText(card);
   const canExpand = options.expand !== false;
+  // Rare signals first, then three fixed slots: an unset flag, star or priority
+  // still holds its place, so the priority chips line up down the column.
   const signals = [
-    card.note ? `<span class="signal note" title="${esc(card.note)}">⚑</span>` : '',
-    card.star ? `<span class="signal star" title="Must not stop">★</span>` : '',
-    card.prio ? `<span class="signal ${String(card.prio).toLowerCase()}">${esc(card.prio)}</span>` : '',
     (card.lavish ?? []).length ? `<span class="signal lavish" data-lavish-url="${esc(card.lavish[0].url)}" title="Lavish review: ${esc(card.lavish.map(a => a.name).join(', '))}">◈</span>` : '',
-    retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : ''
+    retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : '',
+    card.note ? `<span class="signal note" title="${esc(card.note)}">⚑</span>` : '<span class="signal slot-empty"></span>',
+    card.star ? `<span class="signal star" title="Must not stop">★</span>` : '<span class="signal slot-empty"></span>',
+    card.prio ? `<span class="signal ${String(card.prio).toLowerCase()}">${esc(card.prio)}</span>` : '<span class="signal slot-empty"></span>'
   ].join('');
   const actions = (card.cwd ? starControl(card) + prioControl(card) : '') + powerControl(card) + focusControl();
   return `<article class="flight-card compact ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.title || card.note || card.label)}&#10;Click to jump; arrow expands">
@@ -1330,10 +1444,9 @@ function compactCard(card, options = {}) {
     <div class="compact-grid">
       ${canExpand ? `<button type="button" class="expand-mini" data-expand="${esc(card.id)}" title="Expand idle card">▸</button>` : `<span class="state-lamp ${esc(card.status)}"></span>`}
       <span class="compact-number">#${card.number ?? '·'}</span>
-      <span class="compact-main"><span class="compact-label">${esc(card.label)}</span>${repo ? `<span class="compact-repo">${esc(repo)}</span>` : ''}</span>
-      <span class="compact-signals">${signals}</span>
+      <span class="compact-main"><span class="compact-label">${esc(card.label)}</span><span class="compact-repo">${esc(repo)}</span></span>
+      <span class="compact-right"><span class="compact-signals">${signals}</span><span class="compact-actions">${actions}</span></span>
       <span class="compact-age">${esc(age(card.since) || '')}</span>
-      <span class="compact-actions">${actions}</span>
     </div>
   </article>`;
 }
@@ -1406,7 +1519,7 @@ function personRow(key, person, cards, used) {
         ${waiting.length ? `<span class="roster-counter waiting"><span>waiting on you</span><b>${waiting.length}</b></span>` : ''}
         ${(card?.lavish ?? []).length ? `<span class="roster-counter lavish" data-lavish-url="${esc(card.lavish[0].url)}" title="Lavish review: ${esc(card.lavish.map(a => a.name).join(', '))}"><span>◈ lavish</span><b>${card.lavish.length}</b></span>` : ''}
         ${top.length ? `<span class="roster-counter"><span>tasks</span><b>${top.length}</b></span>` : ''}
-        ${card ? powerControl(card) + focusControl() : ''}
+        <span class="person-controls">${card ? powerControl(card) + focusControl() : ''}</span>
       </span>
     </div>
     <div class="person-details">
@@ -1444,11 +1557,10 @@ function renderOther(cards) {
     .map(card => {
       const status = card.status || 'unknown';
       const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
-      const repo = repoText(card);
       const retire = data.retire?.[card.tabId];
       return `<article class="misc-row ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" title="Click to jump to this herdr tab" style="${stateStyle(status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}">
         <span class="misc-state">#${card.number ?? '·'}</span>
-        <span class="misc-identity"><strong title="${esc(card.label)}">${esc(card.label)}</strong><small>${esc(repo || card.wsLabel || card.tabId)}</small></span>
+        <span class="misc-identity"><strong title="${esc(card.label)}">${esc(card.label)}</strong><small>${esc(subText(card))}</small></span>
         <span class="misc-content">
           <span class="misc-title" title="${esc(card.title || 'No reported task')}">${esc(card.title || 'No reported task')}</span>
           ${card.note ? `<span class="misc-note" title="${esc(card.note)}">⚑ ${esc(card.note)}</span>` : ''}
@@ -1479,17 +1591,22 @@ function renderHeader(allViewCards) {
       filter = '';
       localStorage.setItem('board-filter', '');
     }
-    filters.innerHTML = [`<button type="button" class="filter-key ${filter === '' ? 'on' : ''}" data-direction=""><span class="lamp" style="--dir:#7c91a4"></span>All</button>`]
-      .concat(directions.map(direction => `<button type="button" class="filter-key ${filter === direction ? 'on' : ''}" data-direction="${esc(direction)}"><span class="lamp" style="--dir:${dirColor(direction)}"></span>${esc(direction)}</button>`))
+    filters.innerHTML = [`<button type="button" class="filter-key ${filter === '' ? 'on' : ''}" data-direction="" title="All directions"><span class="lamp" style="--dir:#7c91a4"></span><span class="filter-name">All</span></button>`]
+      .concat(directions.map(direction => `<button type="button" class="filter-key ${filter === direction ? 'on' : ''}" data-direction="${esc(direction)}" title="${esc(direction)}"><span class="lamp" style="--dir:${dirColor(direction)}"></span><span class="filter-name">${esc(direction)}</span></button>`))
       .join('');
   } else {
     filters.innerHTML = '';
   }
+  document.querySelector('.command-deck').classList.toggle('no-filters', !filters.children.length);
 
   const timestamp = new Date(data.generatedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const remote = data.remote?.tasks?.length ? ` / <strong>REMOTE ${esc(data.remote.tasks.join(', '))}</strong>` : '';
   const lavishTotal = data.lavish?.total ? ` / <strong class="lavish-total">◈ LAVISH ${data.lavish.total}</strong>` : '';
-  document.getElementById('readout').innerHTML = `SESSIONS ${data.cards.length} / WINDOWS ${data.windows} / UPDATED ${timestamp}${remote}${lavishTotal}`;
+  const readout = document.getElementById('readout');
+  readout.innerHTML = `SESSIONS ${data.cards.length} / WINDOWS ${data.windows} / UPDATED ${timestamp}${remote}${lavishTotal}`;
+  // If the line still has to be cut on a very narrow deck, the full text stays
+  // reachable as a tooltip instead of being lost.
+  readout.title = readout.textContent;
 }
 
 function render() {
@@ -1504,10 +1621,20 @@ function render() {
   else renderKanban(visibleCards);
 
   // Focus changed inside herdr — scroll to the highlighted card.
+  // Vertically only: scrolling the board sideways would push the Blocked
+  // column (the leftmost, the one that matters) out of the window.
   if (data.focusedTab && data.focusedTab !== lastFocusedTab) {
     lastFocusedTab = data.focusedTab;
     const el = document.querySelector('.flight-card.focused, .person-row.focused, .misc-row.focused');
-    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const pane = el && (el.closest('.column-list') || document.getElementById('board'));
+    if (pane) {
+      const card = el.getBoundingClientRect();
+      const view = pane.getBoundingClientRect();
+      const delta = card.top < view.top ? card.top - view.top
+        : card.bottom > view.bottom ? Math.min(card.bottom - view.bottom, card.top - view.top)
+        : 0;
+      if (delta) pane.scrollBy({ top: delta, behavior: 'smooth' });
+    }
   }
 }
 
