@@ -13,7 +13,7 @@ worker.
 
 ## Commands
 
-### `new "<task>" [--cwd <path>] [--file <brief.md>] [--model <name>] [--label <text>]`
+### `new "<task>" [--tree] [--cwd <path>] [--file <brief.md>] [--model <name>] [--label <text>]`
 
 Opens a tab in the captain's window (without stealing focus) and starts a
 worker on the task. Inline text and `--file` can be combined — the file is
@@ -27,6 +27,28 @@ tm-0814-223149  tab w44:t4  pane w44:p4
   status ...\state\teammates\tm-0814-223149.status
 
 Next: node bin\teammate.mjs check
+```
+
+`--tree` gives the worker its own pooled git worktree instead of a shared
+folder. teammate leases a copy of the repository from treehouse (a
+non-interactive `treehouse get --lease`; `--cwd` names the repository, the
+worker's directory becomes the copy) and puts it on a fresh branch
+`tm/<id>` created from the captain's current commit — so parallel workers
+never collide on files, and their work meets only when the captain merges
+the branches. The copy is wiped and returned to the pool at close, so the
+worker's brief grows one extra section: your folder is a temporary copy,
+commit as you go, **only commits survive**. If treehouse will not lease
+(not installed, or the folder is not a git repository), the card is kept
+as `failed-to-create`; a copy that cannot be put on its branch is handed
+back at once, because a lease nobody uses starves the pool.
+
+```
+> node bin\teammate.mjs new "Fix the flaky date test" --tree
+tm-0814-231502  tab w44:t5  pane w44:p5
+  cwd    C:\Users\panto\.treehouse\teammate-1cffa2\2\teammate
+  branch tm/tm-0814-231502  (pooled worktree, lease 3f6b0a1c)
+  brief  ...\state\teammates\tm-0814-231502.brief.md
+  status ...\state\teammates\tm-0814-231502.status
 ```
 
 The card is written **before** the tab exists, so a crash mid-launch leaves
@@ -133,9 +155,23 @@ be unfinished and unsaved, read it first. If the pane already vanished on
 its own, `close` retires the card (after herdr confirms — see the refusals
 below).
 
+A `--tree` worker gets one more refusal: the pooled copy is wiped on
+return, so `close` refuses while the worktree holds uncommitted changes —
+even after a `done:` line. Tell the worker to commit (`say`), or `--force`
+to discard them. Only once herdr confirms the pane gone does the copy go
+back to the pool, and `close` reports how many commits landed on the
+branch, with the merge hint — or a warning when the branch holds nothing.
+If the return itself fails, the card stays open and running `close` again
+retries just that part; the already-gone pane is skipped.
+
 ```
 > node bin\teammate.mjs close tm-0814-223149
 tm-0814-223149 closed (done: docs/teammate.md written and verified)
+
+> node bin\teammate.mjs close tm-0814-231502
+tm-0814-231502 closed (done: test fixed, three commits on the branch)
+3 commit(s) landed on tm/tm-0814-231502 — pick them up with:
+  git merge tm/tm-0814-231502   (then git branch -d tm/tm-0814-231502)
 ```
 
 ## What a card holds
@@ -147,17 +183,22 @@ tm-0814-223149 closed (done: docs/teammate.md written and verified)
 | `id`, `task` | `tm-<MMDD-HHMMSS>` (plus a short random suffix if two hires land in the same second) and the first line of the task |
 | `state` | `creating` → `launching` → `running` → `closed`, or `failed-to-create` / `launch-problem` |
 | `error` | why creating or launching failed — the reason `check` shows |
-| `cwd` | where the worker works |
+| `cwd` | where the worker works — with `--tree`, the leased copy |
+| `repo` | with `--tree`: the repository the copy was taken from |
+| `tree` | with `--tree`: the pooled worktree — `path`, `lease_id`, `branch` (`tm/<id>`) and `base`, the captain's commit the branch grew from |
 | `captain` | pane, tab and workspace ids of the pane that ran `new` |
 | `workspace_id`, `tab_id`, `pane_id` | the worker's own window, tab and pane, as named by herdr |
 | `label`, `model` | the tab label; a model override, if any |
 | `brief`, `status` | paths to the two files next to the card |
 | `env_passed` | names (not values) of the variables handed to the tab |
 | `created_at`, `launched_at`, `closed_at` | timestamps |
+| `tab_closed_at`, `landed_commits` | with `--tree`: when herdr confirmed the tab gone, and how many commits the branch carried beyond `base` — written before the copy is returned, so a failed return still shows what landed |
 | `closed_saying` | the worker's final line, kept after closing |
 
 Next to the card: `<id>.brief.md`, the full task the worker is told to
-read, and `<id>.status`, the file the worker appends to.
+read — a `--tree` worker's brief carries one extra section, "Your folder
+is a temporary copy": commit to the task branch as you go, only commits
+survive the closing — and `<id>.status`, the file the worker appends to.
 
 ## The status contract
 

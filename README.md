@@ -101,6 +101,13 @@ wants your attention and exits 1 when something does. `close` refuses to touch
 anything it cannot prove is still the tab it opened, and erases the record only
 after herdr answers that the pane is gone.
 
+With `--tree`, the worker also gets its own pooled git worktree: teammate
+leases a copy of the repository from treehouse and puts it on a fresh branch
+`tm/<id>` cut from the captain's current commit, so parallel workers never
+collide on files. The copy is wiped when it goes back to the pool at close —
+only commits survive — so `close` refuses while uncommitted changes sit in it,
+then reports how many commits landed on the branch and how to merge them.
+
 See `docs/teammate.md`.
 
 ## How it talks to herdr
