@@ -22,9 +22,11 @@ session straight from herdr and lays it out as a kanban:
   (windows herdr doesn't understand, as a plain list).
 - **The only manual input** is what herdr cannot know: priority (P1/P2/P3),
   a life-direction tag for color-coding, a "must not stop" star (the card
-  turns red if a starred session goes quiet), and a short note. All of it is
-  set by clicking on the card and stored in `state/projects.json`, keyed by
-  the session's working directory.
+  turns red if a starred session goes quiet), a kind — temporary (⏱),
+  ongoing (∞) or cron-driven (↻, work happens on a schedule so an idle
+  session is fine) — and a short note. All of it is set by clicking on the
+  card and stored in `state/projects.json`, keyed by the session's working
+  directory.
 - **Power button on a card** (⏻, asks "sure?") tells the session to save
   everything important to the project's memory and commit, waits for it to
   finish, logs the window to `state/closed.jsonl`, then closes it. If the
@@ -52,6 +54,15 @@ or just run `bin\board.cmd`. The board opens at `http://127.0.0.1:4877`.
 
 Optional autostart on Windows logon: create a scheduled task that runs
 `bin\board-hidden.vbs` (starts the server with no console window).
+
+## Optional: pending review pages (lavish-axi)
+
+If you route decisions through [lavish-axi](https://github.com/kunchenguid/lavish-axi)
+review pages instead of reading terminals, the board can show them: while the
+board is open it asks the `lavish-axi` CLI for its open sessions once a minute
+and pins each artifact to the closest card by its project folder — a magenta
+"◈ LAVISH" strip that opens the review page in a new tab, plus a total in the
+header. If the CLI is not installed, the feature stays off silently.
 
 ## Optional: watching a second machine
 

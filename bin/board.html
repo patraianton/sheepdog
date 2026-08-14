@@ -147,6 +147,9 @@
     white-space: nowrap;
   }
   #readout strong { color: var(--working); font-weight: 600; }
+  #readout strong.lavish-total { color: #f2a7e3; }
+  .misc-note.lavish-note { color: #f2a7e3; cursor: pointer; }
+  .misc-note.lavish-note:hover { color: #ffd1f4; }
   #error {
     display: none;
     flex: none;
@@ -440,6 +443,7 @@
   .control.p2 { color: #ffc878; border-color: #6c5936; }
   .control.p3 { color: #aebdca; }
   .control.kind-temp { color: #79d9ef; }
+  .control.kind-cron { color: #efc06a; }
   .control.kind-ongoing { color: #b9a8ec; }
   .control.expand-control { cursor: pointer; color: var(--focus); }
   .control.confirm {
@@ -604,6 +608,8 @@
   }
   .system-strip.retire { border-color: #5c4c7e; background: #201a33; color: #cdbdff; }
   .system-strip.retire.error { border-color: #7b3c43; background: #31181c; color: #ff9da0; }
+  .system-strip.lavish { border-color: #86407c; background: #2b1230; color: #f2a7e3; cursor: pointer; }
+  .system-strip.lavish:hover { border-color: #d668c4; color: #ffd1f4; }
   .system-strip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .telemetry {
@@ -709,6 +715,8 @@
   .signal.note { color: var(--note); border-color: #66582f; }
   .signal.star { color: var(--note); }
   .signal.retiring { color: var(--violet); border-color: #5b4c78; }
+  .signal.lavish { color: #f2a7e3; border-color: #86407c; cursor: pointer; }
+  .signal.lavish:hover { color: #ffd1f4; border-color: #d668c4; }
   .compact-age {
     min-width: 24px;
     overflow: hidden;
@@ -857,6 +865,8 @@
   .roster-counter b { color: var(--ink); font-family: var(--telemetry); font-size: 10px; }
   .roster-counter.waiting { border-color: #85464a; background: #29181c; color: #ff9b9e; }
   .roster-counter.waiting b { color: #fff0f0; }
+  .roster-counter.lavish { border-color: #86407c; background: #2b1230; color: #f2a7e3; cursor: pointer; }
+  .roster-counter.lavish b { color: #ffe4f8; }
   .person-details {
     display: none;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1124,8 +1134,8 @@ const STATE = {
 };
 const PRIO_NEXT = { P1: 'P2', P2: 'P3', P3: 'P1', '': 'P1' };
 const PRIO_RANK = { P1: 0, P2: 1, P3: 2 };
-const KIND_NEXT = { '': 'temp', temp: 'ongoing', ongoing: '' };
-const KIND_LABEL = { temp: '⏱', ongoing: '∞' };
+const KIND_NEXT = { '': 'temp', temp: 'ongoing', ongoing: 'cron', cron: '' };
+const KIND_LABEL = { temp: '⏱', ongoing: '∞', cron: '↻' };
 const VIEWS = ['mine', 'team', 'other'];
 const VIEW_LABELS = { mine: 'Mine', team: 'Team', other: 'Other' };
 const PULSE_MS = 15 * 60 * 1000;
@@ -1212,7 +1222,7 @@ function prioControl(card, extraClass) {
 }
 
 function kindControl(card) {
-  return `<button type="button" class="control kind-control ${card.kind ? `kind-${esc(card.kind)}` : ''}" data-cwd="${esc(card.cwd)}" data-kind="${esc(card.kind || '')}" title="Kind: ongoing (∞) or temporary (⏱)">${KIND_LABEL[card.kind] || '·'}</button>`;
+  return `<button type="button" class="control kind-control ${card.kind ? `kind-${esc(card.kind)}` : ''}" data-cwd="${esc(card.cwd)}" data-kind="${esc(card.kind || '')}" title="Kind: temporary (⏱), ongoing (∞) or cron-driven (↻)">${KIND_LABEL[card.kind] || '·'}</button>`;
 }
 
 function controlRack(card, allowCollapse) {
@@ -1244,6 +1254,9 @@ function fullCard(card, columnKey) {
   const retireLine = retire
     ? `<div class="system-strip retire ${retire.error ? 'error' : ''}"><b>⏻ RETIRE</b><span title="${esc(retire.error || retire.phase)}">${esc(retire.error || retire.phase)}</span></div>`
     : '';
+  const lavishLines = (card.lavish ?? []).map(a =>
+    `<div class="system-strip lavish" data-lavish-url="${esc(a.url)}" title="Open the review page in the browser">
+      <b>◈ LAVISH</b><span>${esc(a.name)}${a.pending ? ' · reply queued' : ' · awaiting your review'}</span></div>`).join('');
   const titleLine = card.title
     ? `<div class="task-readout"><span class="state-lamp ${esc(card.status)}"></span><span class="task-copy" title="${esc(card.title)}">${esc(card.title)}</span>${card.cwd ? `<button type="button" class="hide-control" data-cwd="${esc(card.cwd)}" data-title="${esc(card.title)}" title="Hide this title (until the task changes)">×</button>` : ''}</div>`
     : '';
@@ -1266,6 +1279,7 @@ function fullCard(card, columnKey) {
       ${titleLine}
       ${remoteLine}
       ${retireLine}
+      ${lavishLines}
       <div class="telemetry">
         <span class="datum vector"><b>Direction</b><span title="${esc(card.dir || 'unassigned')}">${esc(card.dir || 'unassigned')}</span></span>
         <span class="datum window"><b>Window</b><span title="${esc(windowNote || '—')}">${esc(windowNote || '—')}</span></span>
@@ -1284,6 +1298,7 @@ function compactCard(card, options = {}) {
     card.note ? `<span class="signal note" title="${esc(card.note)}">⚑</span>` : '',
     card.star ? `<span class="signal star" title="Must not stop">★</span>` : '',
     card.prio ? `<span class="signal ${String(card.prio).toLowerCase()}">${esc(card.prio)}</span>` : '',
+    (card.lavish ?? []).length ? `<span class="signal lavish" data-lavish-url="${esc(card.lavish[0].url)}" title="Lavish review: ${esc(card.lavish.map(a => a.name).join(', '))}">◈</span>` : '',
     retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : ''
   ].join('');
   const actions = (card.cwd ? starControl(card) + prioControl(card) : '') + powerControl(card) + focusControl();
@@ -1366,6 +1381,7 @@ function personRow(key, person, cards, used) {
       <span class="person-info" title="${esc(info)}">${esc(info)}${person?.trackerDate ? ` · tracker ${esc(person.trackerDate)}` : ''}</span>
       <span class="person-right">
         ${waiting.length ? `<span class="roster-counter waiting"><span>waiting on you</span><b>${waiting.length}</b></span>` : ''}
+        ${(card?.lavish ?? []).length ? `<span class="roster-counter lavish" data-lavish-url="${esc(card.lavish[0].url)}" title="Lavish review: ${esc(card.lavish.map(a => a.name).join(', '))}"><span>◈ lavish</span><b>${card.lavish.length}</b></span>` : ''}
         ${top.length ? `<span class="roster-counter"><span>tasks</span><b>${top.length}</b></span>` : ''}
         ${card ? powerControl(card) + focusControl() : ''}
       </span>
@@ -1413,6 +1429,7 @@ function renderOther(cards) {
         <span class="misc-content">
           <span class="misc-title" title="${esc(card.title || 'No reported task')}">${esc(card.title || 'No reported task')}</span>
           ${card.note ? `<span class="misc-note" title="${esc(card.note)}">⚑ ${esc(card.note)}</span>` : ''}
+          ${(card.lavish ?? []).map(a => `<span class="misc-note lavish-note" data-lavish-url="${esc(a.url)}" title="Open the review page">◈ ${esc(a.name)}</span>`).join('')}
           ${retire ? `<span class="misc-note" title="${esc(retire.error || retire.phase)}">⏻ ${esc(retire.error || retire.phase)}</span>` : ''}
         </span>
         <span class="misc-meta"><span class="misc-age">${age(card.since) ? `stuck ${esc(age(card.since))}` : ''}</span>${powerControl(card)}${focusControl()}</span>
@@ -1448,7 +1465,8 @@ function renderHeader(allViewCards) {
 
   const timestamp = new Date(data.generatedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const remote = data.remote?.tasks?.length ? ` / <strong>REMOTE ${esc(data.remote.tasks.join(', '))}</strong>` : '';
-  document.getElementById('readout').innerHTML = `SESSIONS ${data.cards.length} / WINDOWS ${data.windows} / UPDATED ${timestamp}${remote}`;
+  const lavishTotal = data.lavish?.total ? ` / <strong class="lavish-total">◈ LAVISH ${data.lavish.total}</strong>` : '';
+  document.getElementById('readout').innerHTML = `SESSIONS ${data.cards.length} / WINDOWS ${data.windows} / UPDATED ${timestamp}${remote}${lavishTotal}`;
 }
 
 function render() {
@@ -1521,6 +1539,13 @@ async function setField(cwd, patch, apply) {
 }
 
 document.addEventListener('click', async (ev) => {
+  // A lavish strip opens the review page and must never double as a card click.
+  const lavish = ev.target.closest('[data-lavish-url]');
+  if (lavish) {
+    ev.stopPropagation();
+    window.open(lavish.dataset.lavishUrl, '_blank');
+    return;
+  }
   const vt = ev.target.closest('.view-tab');
   if (vt) {
     view = vt.dataset.view;

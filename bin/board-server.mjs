@@ -213,8 +213,76 @@ async function refreshRemote() {
   } finally { remoteChecking = false; }
 }
 
+// --- Lavish bridge: pending review artifacts (github.com/kunchenguid/lavish-axi).
+// The operator routes decision forks through lavish-axi review pages in the
+// browser; every open page belongs to a project folder (<project>/.lavish/x.html).
+// While the board is open we ask the lavish CLI for its session list once a
+// minute and pin each artifact to the closest matching card. If the CLI is not
+// installed the feature stays off silently.
+const LAVISH_STALE_MS = 60_000;
+const LAVISH_CANDIDATES = [
+  path.join(process.env.APPDATA ?? '', 'npm', 'lavish-axi.cmd'),
+  'lavish-axi',
+];
+let lavishState = { checkedAt: 0, ok: false, artifacts: [] };
+let lavishChecking = false;
+
+function lavishCliOutput() {
+  return new Promise((resolve) => {
+    const tryOne = (i) => {
+      if (i >= LAVISH_CANDIDATES.length) return resolve(null);
+      const bin = LAVISH_CANDIDATES[i];
+      execFile(bin, [], { timeout: 20000, windowsHide: true, shell: bin.endsWith('.cmd') }, (err, stdout) => {
+        const out = String(stdout ?? '');
+        if (err && !out.includes('sessions[')) return tryOne(i + 1);
+        resolve(out);
+      });
+    };
+    tryOne(0);
+  });
+}
+
+// The CLI prints a "sessions[N]{file,status,url,pending_prompts}:" table with
+// one JSON-quoted line per open review page. Anything unparseable is skipped.
+function parseLavishSessions(out) {
+  const artifacts = [];
+  if (!out || !/sessions\[\d+\]/.test(out)) return artifacts;
+  const lines = out.split(/\r?\n/);
+  const start = lines.findIndex(l => /^sessions\[\d+\]\{/.test(l));
+  if (start === -1) return artifacts;
+  for (let i = start + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^\s+("(?:[^"\\]|\\.)*"),([a-z-]+),("(?:[^"\\]|\\.)*"),(\d+)\s*$/);
+    if (!m) break; // end of the table
+    try {
+      const file = normPath(JSON.parse(m[1]));
+      if (m[2] !== 'open') continue;
+      const marker = '\\.lavish\\';
+      const at = file.lastIndexOf(marker);
+      if (at === -1) continue;
+      artifacts.push({
+        folder: file.slice(0, at),
+        name: path.basename(file).replace(/\.html?$/i, ''),
+        url: JSON.parse(m[3]),
+        pending: Number(m[4]) || 0,
+      });
+    } catch { /* one bad line never kills the table */ }
+  }
+  return artifacts;
+}
+
+async function refreshLavish() {
+  if (lavishChecking || Date.now() - lavishState.checkedAt < LAVISH_STALE_MS) return;
+  lavishChecking = true;
+  try {
+    const out = await lavishCliOutput();
+    if (out === null) { lavishState = { checkedAt: Date.now(), ok: false, artifacts: [] }; return; }
+    lavishState = { checkedAt: Date.now(), ok: true, artifacts: parseLavishSessions(out) };
+  } finally { lavishChecking = false; }
+}
+
 async function collect() {
   if (remoteState.checkedAt === 0) await refreshRemote(); else refreshRemote();
+  if (lavishState.checkedAt === 0) await refreshLavish(); else refreshLavish();
   const [snapRes, wsListRes, projects, seen, remoteMapRaw] = await Promise.all([
     herdr(['api', 'snapshot']),
     herdr(['workspace', 'list']).catch(() => null), // the snapshot lacks the repo binding
@@ -238,6 +306,24 @@ async function collect() {
   const wsById = new Map((snap.workspaces ?? []).map(w => [w.workspace_id, w]));
   const tabById = new Map((snap.tabs ?? []).map(t => [t.tab_id, t]));
   const panes = snap.panes ?? [];
+
+  // Each lavish artifact goes to the DEEPEST card folder that contains it —
+  // a review page in team-ops lands on the team-ops card, not on every subcard.
+  const cardCwds = [...new Set(panes.map(p => normPath(p.cwd)).filter(Boolean))];
+  const lavishByCwd = new Map();
+  const lavishUnattached = [];
+  for (const a of lavishState.artifacts) {
+    let best = '';
+    for (const c of cardCwds) {
+      if ((a.folder === c || a.folder.startsWith(c + '\\')) && c.length > best.length) best = c;
+    }
+    if (best) {
+      if (!lavishByCwd.has(best)) lavishByCwd.set(best, []);
+      lavishByCwd.get(best).push({ name: a.name, url: a.url, pending: a.pending });
+    } else {
+      lavishUnattached.push(a);
+    }
+  }
 
   await queued(async () => {
     updateSeen(seen, panes, now);
@@ -283,6 +369,7 @@ async function collect() {
       view: proj?.view ?? null,
       note: proj?.note ?? null,
       remote: onRemote(cwd),
+      lavish: lavishByCwd.get(cwd) ?? [],
       lastWorkingAt: p.agent_status === 'working' ? now : (seen[`${cwd}|~pulse`]?.last ?? null),
       title,
       agent: p.agent ?? null,
@@ -297,6 +384,11 @@ async function collect() {
     windows: (snap.workspaces ?? []).length,
     focusedTab: snap.focused_tab_id ?? null,
     remote: { ok: remoteState.ok, tasks: remoteState.hints },
+    lavish: {
+      ok: lavishState.ok,
+      total: lavishState.artifacts.length,
+      unattached: lavishUnattached.map(a => ({ name: a.name, url: a.url, pending: a.pending, folder: a.folder })),
+    },
     retire: Object.fromEntries(retireJobs),
     team: await readJsonSoft(path.join(STATE_DIR, 'team.json'), null),
   };
@@ -306,7 +398,7 @@ async function collect() {
 const FIELD_CHECK = {
   prio: v => v === null || ['P1', 'P2', 'P3'].includes(v),
   star: v => v === null || typeof v === 'boolean',
-  kind: v => v === null || ['temp', 'ongoing'].includes(v),
+  kind: v => v === null || ['temp', 'ongoing', 'cron'].includes(v),
   view: v => v === null || ['mine', 'team', 'other'].includes(v),
   hideTitle: v => v === null || (typeof v === 'string' && v.length <= 300),
   note: v => v === null || (typeof v === 'string' && v.length <= 300),
