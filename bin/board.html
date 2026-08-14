@@ -6,231 +6,1135 @@
 <title>sheepdog</title>
 <style>
   :root {
-    --bg: #14161a;
-    --panel: #1b1e24;
-    --card: #20242b;
-    --card-edge: #2a2f38;
-    --ink: #d6d9de;
-    --ink-dim: #8b919a;
-    --ink-faint: #5c6370;
-
-    --st-blocked: #e05d5d;
-    --st-done: #e0a84f;
-    --st-working: #5fb97a;
-    --st-idle: #566070;
-    --st-unknown: #454a52;
-    --violet: #b287fd;
-
-    --mono: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
-    --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color-scheme: dark;
+    --bg: #080d13;
+    --deck: #0d141d;
+    --panel: #111b26;
+    --panel-hi: #172433;
+    --panel-low: #0a1119;
+    --line: #253445;
+    --line-hot: #40546a;
+    --ink: #e5edf5;
+    --ink-mid: #9cafc1;
+    --ink-dim: #617487;
+    --blocked: #ff5c5f;
+    --done: #ffb44a;
+    --working: #35d6a0;
+    --idle: #718397;
+    --unknown: #53606f;
+    --focus: #78ddff;
+    --note: #ffd166;
+    --violet: #b99cff;
+    --ui: "Avenir Next Condensed", "Arial Narrow", "Segoe UI", system-ui, sans-serif;
+    --body: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
+    --telemetry: Menlo, Consolas, "Cascadia Mono", monospace;
   }
-  * { box-sizing: border-box; margin: 0; }
-  html, body { height: 100%; }
+
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; }
   body {
-    background: var(--bg);
-    color: var(--ink);
-    font-family: var(--ui);
-    font-size: 14px;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-width: 0;
     overflow: hidden;
+    background:
+      radial-gradient(circle at 50% -20%, #183047 0, transparent 38rem),
+      linear-gradient(180deg, #0a1119 0, var(--bg) 100%);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 13px;
   }
 
-  header {
-    display: flex; align-items: center; gap: 14px;
-    padding: 12px 18px 8px;
+  button { font: inherit; }
+
+  .command-deck {
+    position: relative;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: auto auto minmax(150px, 1fr) auto;
+    grid-template-areas:
+      "brand views readout filters";
+    align-items: center;
+    gap: 10px 14px;
+    min-width: 0;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #121c28 0%, #0c141d 100%);
+    box-shadow: 0 8px 24px #0008;
   }
-  header h1 {
-    font-family: var(--mono);
-    font-size: 15px; font-weight: 600; letter-spacing: .12em;
-    text-transform: uppercase; color: var(--ink);
+  .brand {
+    grid-area: brand;
+    min-width: 120px;
+    line-height: 1;
   }
-  #views { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--card-edge); border-radius: 8px; padding: 2px; }
-  .viewtab {
-    font-size: 13px; color: var(--ink-dim); padding: 4px 14px; border-radius: 6px;
-    cursor: pointer; user-select: none; white-space: nowrap;
+  .brand strong {
+    display: block;
+    font-family: var(--ui);
+    font-size: 19px;
+    font-weight: 900;
+    letter-spacing: .16em;
+    text-transform: uppercase;
   }
-  .viewtab.on { background: var(--card); color: var(--ink); font-weight: 600; }
-  .viewtab .n { color: var(--ink-faint); font-size: 11px; margin-left: 4px; }
-  #updated { color: var(--ink-faint); font-size: 12px; }
+  .brand small {
+    display: block;
+    margin-top: 4px;
+    color: var(--ink-dim);
+    font-family: var(--telemetry);
+    font-size: 8px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+  }
+
+  #views {
+    grid-area: views;
+    display: flex;
+    min-width: 0;
+    border: 1px solid var(--line);
+    background: #080e15;
+  }
+  .view-tab {
+    min-height: 34px;
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: center;
+    gap: 8px;
+    min-width: 76px;
+    padding: 4px 9px;
+    border: 0;
+    border-right: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink-dim);
+    cursor: pointer;
+    font-family: var(--ui);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+  .view-tab:last-child { border-right: 0; }
+  .view-tab:hover { color: var(--ink); background: #182331; }
+  .view-tab.on {
+    color: var(--ink);
+    background: linear-gradient(180deg, #253548, #172331);
+    box-shadow: inset 0 3px 0 var(--focus);
+  }
+  .view-tab .count {
+    min-width: 24px;
+    padding: 2px 4px;
+    background: #071019;
+    color: var(--ink-mid);
+    font-family: var(--telemetry);
+    font-size: 10px;
+    text-align: center;
+  }
+
+  #readout-zone {
+    grid-area: readout;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  #readout {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink-dim);
+    font-family: var(--telemetry);
+    font-size: 9px;
+    letter-spacing: .035em;
+    line-height: 1.55;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #readout strong { color: var(--working); font-weight: 600; }
   #error {
-    display: none; color: #14161a; background: var(--st-blocked);
-    font-size: 12px; padding: 2px 10px; border-radius: 4px;
+    display: none;
+    flex: none;
+    max-width: 50%;
+    overflow: hidden;
+    padding: 3px 8px;
+    border: 1px solid #7b3c43;
+    background: #31181c;
+    color: #ff9da0;
+    font-family: var(--telemetry);
+    font-size: 9px;
+    letter-spacing: .04em;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
-  #filters { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
-  .chip {
-    font-size: 12px; color: var(--ink-dim);
-    background: var(--panel); border: 1px solid var(--card-edge);
-    border-radius: 20px; padding: 3px 11px; cursor: pointer; user-select: none;
+
+  #filters {
+    grid-area: filters;
+    display: flex;
+    justify-content: flex-end;
+    gap: 4px;
+    min-width: 0;
   }
-  .chip .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
-  .chip.on { color: var(--ink); border-color: var(--ink-faint); background: var(--card); }
+  .filter-key {
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 3px 7px;
+    border: 1px solid var(--line);
+    border-radius: 1px;
+    background: #0b121a;
+    color: var(--ink-dim);
+    cursor: pointer;
+    font-family: var(--ui);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .055em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .filter-key:hover { color: var(--ink); border-color: var(--line-hot); }
+  .filter-key.on { color: var(--ink); background: #1b2a39; border-color: #526a80; }
+  .filter-key .lamp { width: 4px; height: 14px; flex: none; background: var(--dir, var(--ink-dim)); }
 
   #board {
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #32465a #0a1017;
+  }
+  #board.kanban {
     display: grid;
-    grid-template-columns: repeat(5, minmax(230px, 1fr));
-    gap: 12px;
-    padding: 4px 18px 18px;
-    height: calc(100vh - 50px);
-    overflow-x: auto;
+    grid-template-columns: repeat(5, minmax(220px, 1fr));
+    align-items: stretch;
+    gap: 8px;
+    padding: 8px 10px 12px;
   }
-  #board.list { display: block; overflow-y: auto; max-width: 860px; }
-  .col { display: flex; flex-direction: column; min-width: 0; }
-  .col-head {
-    display: flex; align-items: baseline; gap: 8px;
-    padding: 6px 2px 8px;
-    border-top: 3px solid var(--col-color, var(--ink-faint));
+  #board.list {
+    display: block;
+    padding: 10px max(10px, calc((100vw - 1080px) / 2)) 28px;
   }
-  .col-head .name {
-    font-family: var(--mono); font-size: 12px; font-weight: 600;
-    letter-spacing: .1em; text-transform: uppercase;
-    color: var(--col-color, var(--ink-dim));
-  }
-  .col-head .count { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
-  .col-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 20px; scrollbar-width: thin; scrollbar-color: var(--card-edge) transparent; }
 
-  .card {
-    background: var(--card);
-    border: 1px solid var(--card-edge);
-    border-left: 4px solid var(--dir-color, var(--card-edge));
-    border-radius: 6px;
-    padding: 8px 10px;
+  .flight-column {
+    --state: var(--unknown);
+    container-type: inline-size;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid #1d2a38;
+    background: #091018b8;
+  }
+  .column-head {
+    position: relative;
+    min-height: 57px;
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 8px;
+    overflow: hidden;
+    border-bottom: 1px solid color-mix(in srgb, var(--state) 45%, var(--line));
+    background:
+      linear-gradient(105deg, color-mix(in srgb, var(--state) 24%, #101923) 0 58%, #101923 58%);
+  }
+  .column-head::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 4px;
+    background: var(--state);
+    box-shadow: 0 0 15px color-mix(in srgb, var(--state) 65%, transparent);
+  }
+  .state-glyph {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border: 1px solid color-mix(in srgb, var(--state) 70%, #fff0);
+    background: color-mix(in srgb, var(--state) 13%, #091018);
+    color: var(--state);
+    font-family: var(--ui);
+    font-size: 17px;
+    font-weight: 900;
+  }
+  .column-title { min-width: 0; }
+  .column-title strong {
+    display: block;
+    overflow: hidden;
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: .055em;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .column-title small {
+    display: block;
+    margin-top: 4px;
+    color: color-mix(in srgb, var(--state) 75%, var(--ink-mid));
+    font-family: var(--telemetry);
+    font-size: 8px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .column-count {
+    min-width: 32px;
+    color: var(--state);
+    font-family: var(--telemetry);
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1;
+    text-align: right;
+  }
+  .column-list {
+    min-height: 0;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    padding: 6px;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4356 transparent;
+  }
+
+  .flight-card {
+    --state: var(--unknown);
+    --dir-color: #3b4d60;
+    position: relative;
+    flex: none;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid #2a3949;
+    border-radius: 2px;
+    background:
+      linear-gradient(160deg, #172331 0, #101923 58%, #0d151f 100%);
+    box-shadow: 0 4px 12px #0005;
     cursor: pointer;
   }
-  .card:hover { border-color: var(--ink-faint); border-left-color: var(--dir-color, var(--ink-faint)); }
-  .card.dim { opacity: .55; }
-  .card.alarm { border-color: var(--st-blocked); border-left-color: var(--st-blocked); }
-  .alarm-note { color: var(--st-blocked); font-weight: 600; }
-  .card.focused {
-    border-color: var(--violet);
-    box-shadow: 0 0 0 2px var(--violet), 0 0 24px #b287fd80;
-    background: #2a2440;
+  .flight-card::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    inset: 0 auto auto 0;
+    width: 52px;
+    height: 3px;
+    background: var(--dir-color);
   }
-  .card.focused .ws-num::after {
-    content: ' YOU ARE HERE';
-    color: var(--violet);
-    font-weight: 700;
+  .flight-card:hover { border-color: #4a6074; }
+  .flight-card.unknown-card { opacity: .62; filter: saturate(.72); }
+  .flight-card.alarm-card {
+    border-color: var(--blocked);
+    box-shadow: 0 0 0 1px #ff5c5f55, 0 4px 14px #0006;
+  }
+  .flight-card.focused {
+    border-color: var(--focus);
+    box-shadow: 0 0 0 1px #78ddff, 0 0 25px #3cbde83d;
+  }
+  .focus-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    padding: 4px 7px;
+    background: var(--focus);
+    color: #07121a;
+    font-family: var(--ui);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: .15em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+  .focus-banner span:last-child {
+    overflow: hidden;
+    font-family: var(--telemetry);
+    font-size: 7px;
     letter-spacing: .08em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .card.mini { padding: 4px 10px; display: flex; align-items: center; gap: 7px; }
-  .card.mini .ws-label { font-size: 12.5px; }
-  .mini-flag { flex: none; font-size: 11px; }
-  .mini-age { margin-left: auto; flex: none; font-size: 11px; color: var(--ink-faint); }
-  .exp { flex: none; cursor: pointer; color: var(--ink-faint); font-size: 11px; padding: 0 3px; }
-  .exp:hover { color: var(--ink); }
 
-  .card-top { display: flex; align-items: center; gap: 8px; }
-  .ws-num { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); flex: none; }
-  .ws-label { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .repo { color: var(--ink-faint); font-size: 12px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .badges { margin-left: auto; display: flex; gap: 4px; align-items: center; flex: none; }
-  .prio, .star, .kind {
-    cursor: pointer; user-select: none;
-    font-family: var(--mono); font-size: 11px; font-weight: 600;
-    padding: 1px 7px; border-radius: 4px; border: 1px solid var(--card-edge); color: var(--ink-faint);
+  .card-body { padding: 7px; }
+  .card-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 6px;
+    min-width: 0;
   }
-  .prio.P1 { color: #ff9d9d; border-color: #6e3a3a; background: #35232366; }
-  .prio.P2 { color: #eec387; border-color: #6e5a34; background: #332c1e66; }
-  .prio.P3 { color: var(--ink-dim); }
-  .star { border: none; padding: 1px 2px; font-size: 13px; }
-  .star.on { color: #ffd257; }
-  .off { border: none; padding: 1px 2px; opacity: 0; }
-  .card:hover .off, .trow:hover .off { opacity: .6; }
-  .off.confirm { opacity: 1; color: var(--st-blocked); font-weight: 700; }
-  .kind.unset { opacity: 0; }
-  .card:hover .kind.unset { opacity: .55; }
-  .kind.temp { color: #9adcf0; border-color: #2f5a68; }
-  .kind.ongoing { color: var(--ink-dim); }
+  .identity {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .tail-number {
+    width: 30px;
+    min-height: 28px;
+    display: grid;
+    place-items: center;
+    border: 1px solid #3a4b5d;
+    background: #0b131c;
+    color: var(--ink-mid);
+    font-family: var(--telemetry);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .label-stack { min-width: 0; }
+  .session-label {
+    display: block;
+    overflow: hidden;
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: .015em;
+    line-height: 1.12;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .repo-label {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--ink-dim);
+    font-family: var(--telemetry);
+    font-size: 7.5px;
+    letter-spacing: .025em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .repo-label::before { content: "BASE / "; color: #425467; }
 
-  .panes { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
-  .pane { display: flex; align-items: center; gap: 7px; min-width: 0; }
-  .pane .dot, .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
-  .pane .t {
-    font-family: var(--mono); font-size: 12px; color: var(--ink-dim);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .control-rack {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 2px;
   }
-  .dot.blocked { background: var(--st-blocked); }
-  .dot.done { background: var(--st-done); }
-  .dot.working { background: var(--st-working); animation: pulse 1.6s ease-in-out infinite; }
-  .dot.idle { background: transparent; border: 1.5px solid var(--st-idle); }
-  .dot.unknown { background: transparent; border: 1.5px dashed var(--st-unknown); }
-  @keyframes pulse { 50% { opacity: .35; } }
-  @media (prefers-reduced-motion: reduce) { .dot.working { animation: none; } }
-  .hidebtn { flex: none; cursor: pointer; color: var(--ink-faint); opacity: 0; font-size: 12px; padding: 0 2px; }
-  .pane:hover .hidebtn { opacity: .8; }
+  .control {
+    height: 23px;
+    min-width: 23px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0 4px;
+    border: 1px solid #35475a;
+    border-radius: 1px;
+    background: #0a121a;
+    color: var(--ink-dim);
+    cursor: pointer;
+    font-family: var(--telemetry);
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1;
+    user-select: none;
+  }
+  .control:hover { color: var(--ink); border-color: #60778c; background: #182433; }
+  .control.star-on { color: var(--note); border-color: #6f6135; }
+  .control.p1 { color: #ff8d8f; border-color: #744347; background: #28171b; }
+  .control.p2 { color: #ffc878; border-color: #6c5936; }
+  .control.p3 { color: #aebdca; }
+  .control.kind-temp { color: #79d9ef; }
+  .control.kind-ongoing { color: #b9a8ec; }
+  .control.expand-control { cursor: pointer; color: var(--focus); }
+  .control.confirm {
+    color: #ffdfe0;
+    border-color: var(--blocked);
+    background: #47191d;
+    animation: live-pulse 1.2s ease-in-out infinite;
+  }
 
-  .noteline {
-    margin-top: 5px; font-size: 12px; color: var(--st-done);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .alarm-annunciator {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    margin-top: 6px;
+    padding: 5px 7px;
+    overflow: hidden;
+    border: 1px solid #ff7779;
+    background:
+      repeating-linear-gradient(125deg, #551c22 0 7px, #49171d 7px 14px);
+    color: #fff1f1;
+    box-shadow: inset 0 0 15px #ff353528, 0 0 10px #ff444421;
+    font-family: var(--ui);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: .09em;
+    line-height: 1.2;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
-  .noteline::before { content: '⚑ '; }
-  .remoteline {
-    margin-top: 5px; display: flex; align-items: center; gap: 7px;
-    font-family: var(--mono); font-size: 12px; color: var(--st-working);
+  .alarm-annunciator .alarm-icon {
+    width: 15px;
+    height: 15px;
+    display: grid;
+    place-items: center;
+    background: var(--blocked);
+    color: #19080a;
   }
-  .retire-line { margin-top: 5px; font-size: 12px; color: var(--violet); }
-  .retire-line.err { color: var(--st-blocked); }
-  .card-meta { margin-top: 6px; display: flex; gap: 10px; font-size: 11.5px; color: var(--ink-faint); }
-  .card-meta .age.hot { color: var(--st-done); }
-  .card-meta .age.vhot { color: var(--st-blocked); }
+  .alarm-annunciator .alarm-copy {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .alarm-annunciator small {
+    color: #ffb4b6;
+    font-family: var(--telemetry);
+    font-size: 7px;
+    letter-spacing: .03em;
+  }
 
-  /* Team: one row per person */
-  .trow {
-    background: var(--card); border: 1px solid var(--card-edge); border-radius: 6px;
-    margin-bottom: 8px; padding: 9px 12px; cursor: pointer;
+  .operator-note {
+    display: grid;
+    grid-template-columns: 53px minmax(0, 1fr);
+    gap: 7px;
+    min-width: 0;
+    margin-top: 6px;
+    border: 1px solid #6d5b2d;
+    background: linear-gradient(90deg, #3c321b, #252419 65%, #1c1c17);
   }
-  .trow:hover { border-color: var(--ink-faint); }
-  .trow.focused { border-color: var(--violet); box-shadow: 0 0 0 1px var(--violet); }
-  .trow-top { display: flex; align-items: center; gap: 9px; }
-  .trow-name { font-weight: 600; font-size: 14px; min-width: 90px; }
-  .trow-info { color: var(--ink-dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .trow-right { margin-left: auto; display: flex; gap: 8px; align-items: center; flex: none; font-size: 11.5px; color: var(--ink-faint); }
-  .wait-chip { color: #ff9d9d; border: 1px solid #6e3a3a; background: #35232366; border-radius: 4px; padding: 1px 7px; font-weight: 600; font-size: 11px; }
-  .trow-items { margin-top: 7px; display: none; }
-  .trow.open .trow-items { display: block; }
-  .titem { font-size: 12.5px; color: var(--ink-dim); padding: 2px 0 2px 14px; }
-  .titem.wait { color: #ff9d9d; }
-  .titem.deadline { color: var(--st-done); }
-  .tsec { margin-top: 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); }
+  .note-callout {
+    display: grid;
+    place-items: center;
+    padding: 5px 4px;
+    background: var(--note);
+    color: #201a08;
+    font-family: var(--ui);
+    font-size: 7px;
+    font-weight: 900;
+    letter-spacing: .08em;
+    line-height: 1.1;
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .note-copy {
+    min-width: 0;
+    display: -webkit-box;
+    align-self: center;
+    overflow: hidden;
+    padding: 5px 6px 5px 0;
+    color: #ffe8a6;
+    font-size: 10px;
+    font-weight: 650;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .task-readout {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 6px;
+    min-width: 0;
+    margin-top: 6px;
+    padding: 5px 6px;
+    border: 1px solid #26384a;
+    background: #0c151f;
+  }
+  .state-lamp {
+    width: 9px;
+    height: 9px;
+    margin-top: 2px;
+    border: 2px solid var(--state);
+    background: transparent;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--state) 45%, transparent);
+  }
+  .state-lamp.working {
+    border-color: var(--working);
+    background: var(--working);
+    animation: live-pulse 1.6s ease-in-out infinite;
+  }
+  .state-lamp.blocked { border-color: var(--blocked); background: var(--blocked); }
+  .state-lamp.done { border-color: var(--done); background: var(--done); }
+  .state-lamp.idle { border-radius: 50%; }
+  .state-lamp.unknown { border-style: dashed; }
+  @keyframes live-pulse { 50% { opacity: .38; } }
+  .task-copy {
+    display: -webkit-box;
+    min-width: 0;
+    overflow: hidden;
+    color: #bfcbd7;
+    font-size: 10px;
+    line-height: 1.32;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .hide-control {
+    width: 16px;
+    height: 16px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-dim);
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+    opacity: 0;
+  }
+  .task-readout:hover .hide-control { opacity: .8; }
+  .hide-control:hover { color: var(--ink); }
+
+  .system-strip {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    margin-top: 5px;
+    padding: 5px 7px;
+    border: 1px solid #275f5a;
+    background: #0e2927;
+    color: #8ce8ce;
+    font-family: var(--telemetry);
+    font-size: 8px;
+    letter-spacing: .025em;
+    line-height: 1.25;
+  }
+  .system-strip.retire { border-color: #5c4c7e; background: #201a33; color: #cdbdff; }
+  .system-strip.retire.error { border-color: #7b3c43; background: #31181c; color: #ff9da0; }
+  .system-strip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .telemetry {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, .9fr) auto;
+    gap: 5px;
+    min-width: 0;
+    margin-top: 6px;
+    padding-top: 5px;
+    border-top: 1px solid #253342;
+  }
+  .datum { min-width: 0; overflow: hidden; }
+  .datum b {
+    display: block;
+    color: #506579;
+    font-family: var(--ui);
+    font-size: 6.5px;
+    font-weight: 900;
+    letter-spacing: .11em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .datum span {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--ink-mid);
+    font-family: var(--telemetry);
+    font-size: 7.5px;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .datum.vector span { color: color-mix(in srgb, var(--dir-color) 68%, #fff); }
+  .datum.age span.hot { color: var(--done); }
+  .datum.age span.vhot { color: var(--blocked); }
+
+  /* Compact Idle flight strips. */
+  .flight-card.compact { min-height: 39px; }
+  .compact-grid {
+    min-height: 39px;
+    display: grid;
+    grid-template-columns: 18px 27px minmax(0, 1fr) auto auto auto;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    padding: 5px 5px 5px 4px;
+  }
+  .expand-mini {
+    width: 18px;
+    height: 25px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--focus);
+    cursor: pointer;
+    font-family: var(--telemetry);
+    font-size: 11px;
+  }
+  .compact-number {
+    color: var(--ink-dim);
+    font-family: var(--telemetry);
+    font-size: 8px;
+    font-weight: 700;
+  }
+  .compact-main { min-width: 0; }
+  .compact-label {
+    display: block;
+    overflow: hidden;
+    color: #cbd6df;
+    font-family: var(--ui);
+    font-size: 11px;
+    font-weight: 850;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .compact-repo {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: #536779;
+    font-family: var(--telemetry);
+    font-size: 6.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .compact-signals { display: flex; align-items: center; gap: 3px; }
+  .signal {
+    min-width: 18px;
+    height: 17px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0 3px;
+    border: 1px solid #334557;
+    color: var(--ink-dim);
+    font-family: var(--telemetry);
+    font-size: 7px;
+    font-weight: 700;
+  }
+  .signal.note { color: var(--note); border-color: #66582f; }
+  .signal.star { color: var(--note); }
+  .signal.retiring { color: var(--violet); border-color: #5b4c78; }
+  .compact-age {
+    min-width: 24px;
+    overflow: hidden;
+    color: #687b8d;
+    font-family: var(--telemetry);
+    font-size: 7px;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .compact-actions { display: flex; gap: 2px; }
+  .compact-actions .control { width: 18px; min-width: 18px; height: 18px; padding: 0; font-size: 7px; }
+  .compact-actions .control.confirm { width: auto; padding: 0 3px; }
+
+  /* Team roster and unrecognized-window manifest. */
+  .list-shell {
+    container-type: inline-size;
+    min-width: 0;
+    border: 1px solid #263647;
+    background: #0b121a;
+    box-shadow: 0 10px 35px #0006;
+  }
+  .list-masthead {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 12px;
+    padding: 11px 13px;
+    border-bottom: 1px solid #33465a;
+    background: linear-gradient(105deg, #1d2c3d, #101923 70%);
+  }
+  .list-masthead h2 {
+    margin: 0;
+    font-family: var(--ui);
+    font-size: 16px;
+    font-weight: 900;
+    letter-spacing: .09em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .list-masthead p {
+    margin: 5px 0 0;
+    color: var(--ink-dim);
+    font-size: 10px;
+    line-height: 1.35;
+  }
+  .mast-metric {
+    color: var(--focus);
+    font-family: var(--telemetry);
+    font-size: 10px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .roster { padding: 6px; }
+  .person-row {
+    --state: var(--unknown);
+    position: relative;
+    margin-bottom: 5px;
+    overflow: hidden;
+    border: 1px solid #2a3a4b;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--state) 7%, #111a24), #101822 64%);
+    cursor: pointer;
+  }
+  .person-row.focused { border-color: var(--focus); box-shadow: inset 0 0 0 1px #78ddff66; }
+  .person-top {
+    min-height: 52px;
+    display: grid;
+    grid-template-columns: 22px 35px minmax(95px, .65fr) minmax(140px, 1.5fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 7px 8px;
+  }
+  .person-expand {
+    width: 22px;
+    height: 30px;
+    border: 0;
+    background: transparent;
+    color: var(--focus);
+    cursor: pointer;
+    font-family: var(--telemetry);
+    font-size: 11px;
+  }
+  .person-status {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border: 1px solid color-mix(in srgb, var(--state) 65%, #334456);
+    background: color-mix(in srgb, var(--state) 12%, #0b121a);
+    color: var(--state);
+    font-family: var(--ui);
+    font-size: 14px;
+    font-weight: 900;
+  }
+  .person-name { min-width: 0; }
+  .person-name strong {
+    display: block;
+    overflow: hidden;
+    font-family: var(--ui);
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: .025em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .person-name small {
+    display: block;
+    margin-top: 3px;
+    color: #607488;
+    font-family: var(--telemetry);
+    font-size: 7px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .person-info {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink-mid);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .person-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .roster-counter {
+    min-height: 25px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 7px;
+    border: 1px solid #3a4b5d;
+    background: #0a121b;
+    color: var(--ink-dim);
+    font-family: var(--ui);
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .roster-counter b { color: var(--ink); font-family: var(--telemetry); font-size: 10px; }
+  .roster-counter.waiting { border-color: #85464a; background: #29181c; color: #ff9b9e; }
+  .roster-counter.waiting b { color: #fff0f0; }
+  .person-details {
+    display: none;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    padding: 1px;
+    border-top: 1px solid #2d4052;
+    background: #263747;
+  }
+  .person-row.open .person-details { display: grid; }
+  .detail-bay {
+    min-width: 0;
+    padding: 8px 9px;
+    background: #0d161f;
+  }
+  .detail-bay h3 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 0 6px;
+    color: #6f8498;
+    font-family: var(--ui);
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .detail-bay h3 b { color: var(--ink-mid); font-family: var(--telemetry); }
+  .detail-bay.action h3 { color: #ff9295; }
+  .detail-bay.deadline h3 { color: #ffc46b; }
+  .detail-list { margin: 0; padding: 0; list-style: none; }
+  .detail-list li {
+    position: relative;
+    padding: 4px 0 4px 12px;
+    border-top: 1px solid #1b2936;
+    color: #a7b7c5;
+    font-size: 9.5px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .detail-list li:first-child { border-top: 0; }
+  .detail-list li::before { content: ""; position: absolute; left: 1px; top: 9px; width: 4px; height: 4px; background: #62788c; }
+  .detail-bay.action li { color: #ffc0c2; }
+  .detail-bay.action li::before { background: var(--blocked); }
+  .detail-bay.deadline li { color: #e6c891; }
+  .detail-bay.deadline li::before { background: var(--done); }
+  .empty-detail { color: #506275; font-size: 9px; font-style: italic; }
+
+  .subsection-label {
+    margin: 10px 2px 6px;
+    color: #657a8e;
+    font-family: var(--ui);
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+  }
+  .team-mini-stack { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+  .team-mini-stack .flight-card { margin: 0; }
+
+  .manifest { padding: 6px; }
+  .misc-row {
+    --state: var(--unknown);
+    --dir-color: #3b4d60;
+    position: relative;
+    display: grid;
+    grid-template-columns: 43px minmax(120px, .8fr) minmax(160px, 1.5fr) auto;
+    align-items: stretch;
+    min-width: 0;
+    margin-bottom: 5px;
+    border: 1px solid #2a3b4c;
+    background: #101923;
+    cursor: pointer;
+  }
+  .misc-row.focused { border-color: var(--focus); }
+  .misc-state {
+    display: grid;
+    place-items: center;
+    border-right: 1px solid color-mix(in srgb, var(--state) 55%, #263747);
+    background: color-mix(in srgb, var(--state) 13%, #0b121a);
+    color: var(--state);
+    font-family: var(--telemetry);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .misc-identity, .misc-content, .misc-meta { min-width: 0; padding: 7px 9px; }
+  .misc-identity { border-right: 1px solid #263747; }
+  .misc-identity strong {
+    display: block;
+    overflow: hidden;
+    font-family: var(--ui);
+    font-size: 12px;
+    font-weight: 900;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .misc-identity small {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--ink-dim);
+    font-family: var(--telemetry);
+    font-size: 7px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .misc-content { align-self: center; }
+  .misc-title, .misc-note {
+    display: block;
+    overflow: hidden;
+    font-size: 9.5px;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .misc-title { color: #afbfcc; }
+  .misc-note { margin-top: 3px; color: var(--note); font-weight: 650; }
+  .misc-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 5px;
+    border-left: 1px solid #263747;
+  }
+  .misc-age { color: #74879a; font-family: var(--telemetry); font-size: 8px; white-space: nowrap; }
+
+  /* Column-width degradation ladder: 500 -> 320 -> 260 -> 220px. */
+  @container (min-width: 500px) {
+    .card-body { padding: 9px; }
+    .task-copy, .note-copy { font-size: 11px; }
+    .session-label { font-size: 14px; }
+    .task-copy { -webkit-line-clamp: 3; }
+    .note-copy { -webkit-line-clamp: 3; }
+  }
+
+  @container (max-width: 320px) {
+    .column-head { grid-template-columns: 29px minmax(0, 1fr) auto; gap: 6px; padding-inline: 6px; }
+    .state-glyph { width: 27px; height: 27px; }
+    .card-head { grid-template-columns: minmax(0, 1fr); }
+    .control-rack { justify-content: flex-start; padding-left: 36px; }
+    .alarm-annunciator small { display: none; }
+    .telemetry { grid-template-columns: minmax(0, 1fr) auto; }
+    .datum.window { display: none; }
+    .compact-repo { display: none; }
+  }
+
+  @container (max-width: 260px) {
+    .card-body { padding: 6px; }
+    .operator-note { grid-template-columns: 45px minmax(0, 1fr); }
+    .note-callout { font-size: 6px; }
+    .task-copy, .note-copy { -webkit-line-clamp: 2; }
+    .control { min-width: 21px; height: 21px; padding-inline: 3px; font-size: 7px; }
+    .control-rack { padding-left: 0; }
+    .alarm-annunciator { font-size: 8px; letter-spacing: .06em; }
+    .compact-grid { grid-template-columns: 16px 24px minmax(0, 1fr) auto; gap: 3px; }
+    .compact-age { display: none; }
+    .compact-signals { display: none; }
+    .expand-mini { width: 16px; }
+  }
+
+  @container (max-width: 230px) {
+    .column-title small { display: none; }
+    .column-head { min-height: 49px; }
+    .identity { grid-template-columns: 27px minmax(0, 1fr); gap: 5px; }
+    .tail-number { width: 27px; min-height: 25px; }
+    .session-label { font-size: 12px; }
+    .operator-note { grid-template-columns: 39px minmax(0, 1fr); }
+    .note-copy { font-size: 9px; }
+    .task-copy { font-size: 9px; -webkit-line-clamp: 1; }
+    .telemetry { grid-template-columns: minmax(0, 1fr) auto; }
+    .datum span { font-size: 7px; }
+  }
+
+  @container (max-width: 700px) {
+    .person-top { grid-template-columns: 22px 34px minmax(0, 1fr) auto; }
+    .person-info { grid-column: 3 / -1; grid-row: 2; padding-bottom: 2px; }
+    .person-right { grid-column: 4; grid-row: 1; }
+    .person-details { grid-template-columns: 1fr; }
+    .team-mini-stack { grid-template-columns: 1fr; }
+    .misc-row { grid-template-columns: 39px minmax(0, 1fr) auto; }
+    .misc-content { grid-column: 2 / -1; border-top: 1px solid #263747; }
+    .misc-meta { grid-column: 3; grid-row: 1; }
+  }
+
+  @media (max-width: 1120px) {
+    .command-deck {
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-areas:
+        "brand readout"
+        "views views"
+        "filters filters";
+    }
+    #views { width: min(100%, 390px); }
+    #filters { justify-content: flex-start; overflow-x: auto; padding-bottom: 1px; }
+  }
+  @media (max-width: 650px) {
+    .command-deck {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "brand" "views" "readout" "filters";
+      gap: 7px;
+    }
+    .brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .brand small { margin: 0; }
+    #views { width: 100%; }
+    .view-tab { min-width: 0; flex: 1; justify-content: center; }
+    #readout { white-space: normal; }
+    #board.list { padding-inline: 6px; }
+    .list-masthead { grid-template-columns: minmax(0, 1fr); }
+    .mast-metric { text-align: left; }
+  }
+  @media (max-width: 340px) {
+    .command-deck { padding: 7px 6px; }
+    .brand strong { font-size: 16px; }
+    .brand small { display: none; }
+    .view-tab { padding-inline: 4px; font-size: 9px; }
+    .view-tab .count { min-width: 19px; }
+    .filter-key { font-size: 8px; padding-inline: 5px; }
+    .person-top { grid-template-columns: 20px 31px minmax(0, 1fr); gap: 5px; padding-inline: 5px; }
+    .person-status { width: 30px; height: 30px; }
+    .person-right { grid-column: 3; grid-row: 2; justify-content: flex-start; flex-wrap: wrap; }
+    .person-info { grid-column: 1 / -1; grid-row: 3; }
+    .roster-counter { padding-inline: 5px; }
+    .misc-row { grid-template-columns: 34px minmax(0, 1fr); }
+    .misc-meta { grid-column: 2; grid-row: 2; justify-content: flex-start; border-top: 1px solid #263747; border-left: 0; }
+    .misc-content { grid-column: 2; grid-row: 3; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    .state-lamp.working { animation: none; }
+    .control.confirm { animation: none; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>sheepdog</h1>
-  <nav id="views"></nav>
-  <span id="updated">loading…</span>
-  <span id="error"></span>
-  <nav id="filters"></nav>
+<header class="command-deck">
+  <div class="brand"><strong>Sheepdog</strong><small>fleet control // local</small></div>
+  <nav id="views" aria-label="Board views"></nav>
+  <div id="readout-zone">
+    <div id="readout" aria-live="polite">AWAITING TELEMETRY…</div>
+    <span id="error" role="alert"></span>
+  </div>
+  <nav id="filters" aria-label="Direction filters"></nav>
 </header>
-<main id="board"></main>
+<main id="board" class="kanban"></main>
 
 <script>
 // Direction colors: a fixed palette assigned by a stable hash of the
 // direction name, so any set of directions gets consistent colors
-// without hardcoding your life's categories into the source.
+// without hardcoding categories into the source.
 const DIR_PALETTE = ['#4c8fe0', '#8f6fe8', '#d08770', '#6c7686', '#56b3a5', '#d979b8', '#a3c76d'];
-function dirColor(d) {
-  if (!d) return null;
-  let h = 5381;
-  for (const ch of String(d)) h = ((h * 33) ^ ch.codePointAt(0)) >>> 0;
-  return DIR_PALETTE[h % DIR_PALETTE.length];
+function dirColor(direction) {
+  if (!direction) return null;
+  let hash = 5381;
+  for (const ch of String(direction)) hash = ((hash * 33) ^ ch.codePointAt(0)) >>> 0;
+  return DIR_PALETTE[hash % DIR_PALETTE.length];
 }
-const COL_COLORS = {
-  blocked: 'var(--st-blocked)',
-  done: 'var(--st-done)',
-  working: 'var(--st-working)',
-  idle: 'var(--st-idle)',
-  unknown: 'var(--st-unknown)',
+
+const STATE = {
+  blocked: { color: 'var(--blocked)', glyph: '!', code: 'ACTION' },
+  done: { color: 'var(--done)', glyph: '✓', code: 'REVIEW' },
+  working: { color: 'var(--working)', glyph: '▶', code: 'LIVE' },
+  idle: { color: 'var(--idle)', glyph: 'Ⅱ', code: 'STANDBY' },
+  unknown: { color: 'var(--unknown)', glyph: '?', code: 'NO SIGNAL' }
 };
 const PRIO_NEXT = { P1: 'P2', P2: 'P3', P3: 'P1', '': 'P1' };
 const PRIO_RANK = { P1: 0, P2: 1, P3: 2 };
 const KIND_NEXT = { '': 'temp', temp: 'ongoing', ongoing: '' };
-const KIND_LABEL = { temp: '⏱ temp', ongoing: '∞' };
+const KIND_LABEL = { temp: '⏱', ongoing: '∞' };
 const VIEWS = ['mine', 'team', 'other'];
-const VIEW_LABEL = { mine: 'Mine', team: 'Team', other: 'Other' };
+const VIEW_LABELS = { mine: 'Mine', team: 'Team', other: 'Other' };
 const PULSE_MS = 15 * 60 * 1000;
 
 let data = null;
+let NOW = Date.now();
+const query = new URLSearchParams(location.search);
 let filter = localStorage.getItem('board-filter') || '';
-let view = new URLSearchParams(location.search).get('view') || localStorage.getItem('board-view') || 'mine';
+let view = query.get('view') || localStorage.getItem('board-view') || 'mine';
 if (!VIEWS.includes(view)) view = 'mine';
 let lastFocusedTab = null;
 let pageVersion = null;
@@ -238,266 +1142,332 @@ let pendingOff = null;
 let pendingOffTimer = null;
 const expanded = new Set();
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
 }
 
-function viewOf(c) {
-  return c.view ?? (c.status === 'unknown' ? 'other' : 'mine');
+function viewOf(card) {
+  return card.view ?? (card.status === 'unknown' ? 'other' : 'mine');
 }
 
-function age(sinceIso, now) {
+function age(sinceIso) {
   if (!sinceIso) return null;
-  const mins = Math.round((now - new Date(sinceIso).getTime()) / 60000);
-  if (mins < 5) return null;
-  if (mins < 60) return `${mins} min`;
-  if (mins < 48 * 60) return `${Math.round(mins / 60)} h`;
-  return `${Math.round(mins / 60 / 24)} d`;
+  const minutes = Math.round((NOW - new Date(sinceIso).getTime()) / 60000);
+  if (minutes < 5) return null;
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 48 * 60) return `${Math.round(minutes / 60)} h`;
+  return `${Math.round(minutes / 60 / 24)} d`;
 }
 
-// "lane-1 · my-project": a branch window shows its parent project
+function hasPulse(card) {
+  return Boolean(card.star && card.lastWorkingAt && (NOW - new Date(card.lastWorkingAt).getTime()) < PULSE_MS);
+}
+
+function columnOf(card) {
+  return card.status !== 'blocked' && (card.remote || card.status === 'working' || hasPulse(card))
+    ? 'working'
+    : card.status;
+}
+
+function isAlarm(card) {
+  return Boolean(card.star && card.status !== 'working' && !card.remote && !hasPulse(card));
+}
+
+// "lane-1 / my-project": a branch window shows its parent project
 // unless the name already sounds in the card or window label.
-function repoNote(c) {
-  if (!c.repo) return '';
-  const norm = s => String(s ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-  const r = norm(c.repo);
-  const covers = (name) => {
-    const n = norm(name);
-    return n && (n.includes(r) || (n.length >= 4 && r.includes(n)));
+function repoText(card) {
+  if (!card.repo) return '';
+  const normalize = value => String(value ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const repo = normalize(card.repo);
+  const covers = value => {
+    const name = normalize(value);
+    return name && (name.includes(repo) || (name.length >= 4 && repo.includes(name)));
   };
-  if (!r || covers(c.label) || covers(c.wsLabel)) return '';
-  return `<span class="repo">· ${esc(c.repo)}</span>`;
+  return !repo || covers(card.label) || covers(card.wsLabel) ? '' : card.repo;
 }
 
-function hasPulse(c, now) {
-  return c.star && c.lastWorkingAt && (now - new Date(c.lastWorkingAt).getTime()) < PULSE_MS;
-}
-function colOf(c, now) {
-  return (c.status !== 'blocked' && (c.remote || c.status === 'working' || hasPulse(c, now))) ? 'working' : c.status;
+function stateStyle(status) {
+  return `--state:${STATE[status]?.color || STATE.unknown.color}`;
 }
 
-function offBtnHtml(c, extra) {
-  const offPending = pendingOff === c.tabId;
-  return `<span class="off ${offPending ? 'confirm' : ''} ${extra || ''}" data-pane="${esc(c.id)}" data-tab="${esc(c.tabId)}" data-ws="${esc(c.tabId.split(':')[0])}" title="Save memory and close the window">${offPending ? 'sure?' : '⏻'}</span>`;
+// Power button: first click arms it ("SURE?"), second click retires the tab.
+function powerControl(card) {
+  const tabId = card?.tabId || '';
+  const offPending = pendingOff === tabId && tabId;
+  return `<button type="button" class="control power-control ${offPending ? 'confirm' : ''}" data-pane="${esc(card?.id || '')}" data-tab="${esc(tabId)}" data-ws="${esc(tabId ? tabId.split(':')[0] : '')}" title="Save memory and close the window">${offPending ? 'SURE?' : '⏻'}</button>`;
 }
 
-function fullCard(c, colKey, now) {
-  const a = colOf(c, now) === c.status ? age(c.since, now) : null;
-  const ageCls = c.status === 'blocked' || c.status === 'done'
-    ? (a && a.includes('d') && !a.includes('min') ? 'vhot' : 'hot') : '';
-  const job = data.retire?.[c.tabId];
-  const badges = c.cwd
-    ? `<span class="badges">` + offBtnHtml(c) +
-      `<span class="star ${c.star ? 'on' : ''}" data-cwd="${esc(c.cwd)}" data-star="${c.star ? '1' : ''}" title="Star: must not stop">${c.star ? '★' : '☆'}</span>` +
-      `<span class="kind ${esc(c.kind || 'unset')}" data-cwd="${esc(c.cwd)}" data-kind="${esc(c.kind || '')}" title="Kind: ongoing (∞) or temporary (⏱)">${KIND_LABEL[c.kind] || '·'}</span>` +
-      `<span class="prio ${esc(c.prio || '')}" data-cwd="${esc(c.cwd)}" data-prio="${esc(c.prio || '')}" title="Click to change priority">${esc(c.prio || '·')}</span>` +
-      `</span>`
-    : `<span class="badges">` + offBtnHtml(c) + `<span class="prio" title="This session has no folder" style="cursor:default">·</span></span>`;
-  const titleLine = c.title
-    ? `<div class="panes"><div class="pane"><span class="dot ${esc(c.status)}"></span>` +
-      `<span class="t" title="${esc(c.title)}">${esc(c.title)}</span>` +
-      (c.cwd ? `<span class="hidebtn" data-cwd="${esc(c.cwd)}" data-title="${esc(c.title)}" title="Hide this title (until the task changes)">×</span>` : '') +
-      `</div></div>`
+// Focus glyph: carries no handler of its own — the click bubbles to the
+// enclosing [data-tab] element, which jumps to the herdr tab.
+function focusControl() {
+  return `<button type="button" class="control focus-control" title="Jump to this herdr tab">⌖</button>`;
+}
+
+function starControl(card, extraClass) {
+  return `<button type="button" class="control star-control ${card.star ? 'star-on' : ''} ${extraClass || ''}" data-cwd="${esc(card.cwd)}" data-star="${card.star ? '1' : ''}" title="Star: must not stop">${card.star ? '★' : '☆'}</button>`;
+}
+
+function prioControl(card, extraClass) {
+  return `<button type="button" class="control prio-control ${String(card.prio || '').toLowerCase()} ${extraClass || ''}" data-cwd="${esc(card.cwd)}" data-prio="${esc(card.prio || '')}" title="Click to change priority">${esc(card.prio || '·')}</button>`;
+}
+
+function kindControl(card) {
+  return `<button type="button" class="control kind-control ${card.kind ? `kind-${esc(card.kind)}` : ''}" data-cwd="${esc(card.cwd)}" data-kind="${esc(card.kind || '')}" title="Kind: ongoing (∞) or temporary (⏱)">${KIND_LABEL[card.kind] || '·'}</button>`;
+}
+
+function controlRack(card, allowCollapse) {
+  const power = powerControl(card);
+  const focus = focusControl();
+  if (!card.cwd) return `<div class="control-rack">${power}${focus}</div>`;
+  const collapse = allowCollapse
+    ? `<button type="button" class="control expand-control" data-expand="${esc(card.id)}" title="Collapse idle card">▴</button>`
     : '';
-  const pulseAgo = c.lastWorkingAt ? Math.round((now - new Date(c.lastWorkingAt).getTime()) / 60000) : null;
-  const macLine = c.remote
-    ? '<div class="remoteline"><span class="dot working"></span>agent working on second machine</div>'
-    : (c.status !== 'working' && hasPulse(c, now)
-      ? `<div class="remoteline"><span class="dot working"></span>pulse: active ${pulseAgo < 1 ? 'just now' : pulseAgo + ' min ago'}</div>`
+  return `<div class="control-rack">${collapse}${starControl(card)}${kindControl(card)}${prioControl(card)}${power}${focus}</div>`;
+}
+
+function fullCard(card, columnKey) {
+  const displayedAge = columnOf(card) === card.status ? age(card.since) : null;
+  const ageClass = card.status === 'blocked' || card.status === 'done'
+    ? (displayedAge && displayedAge.includes('d') && !displayedAge.includes('min') ? 'vhot' : 'hot')
+    : '';
+  const alarm = isAlarm(card);
+  const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
+  const retire = data.retire?.[card.tabId];
+  const repo = repoText(card);
+  const windowNote = card.wsLabel && card.wsLabel !== card.label ? card.wsLabel : '';
+  const pulseMinutes = card.lastWorkingAt ? Math.round((NOW - new Date(card.lastWorkingAt).getTime()) / 60000) : null;
+  const remoteLine = card.remote
+    ? `<div class="system-strip"><b>REMOTE</b><span>agent active on second machine</span></div>`
+    : (card.status !== 'working' && hasPulse(card)
+      ? `<div class="system-strip"><b>PULSE</b><span>active ${pulseMinutes < 1 ? 'just now' : `${pulseMinutes} min ago`}</span></div>`
       : '');
-  const retireLine = job
-    ? `<div class="retire-line ${job.error ? 'err' : ''}">⏻ ${esc(job.error || job.phase)}</div>`
+  const retireLine = retire
+    ? `<div class="system-strip retire ${retire.error ? 'error' : ''}"><b>⏻ RETIRE</b><span title="${esc(retire.error || retire.phase)}">${esc(retire.error || retire.phase)}</span></div>`
     : '';
-  const wsNote = c.wsLabel && c.wsLabel !== c.label ? `<span>window ${esc(c.wsLabel)}</span>` : '';
-  const alarm = c.star && c.status !== 'working' && !c.remote && !hasPulse(c, now);
-  const isFocused = c.tabId && c.tabId === data.focusedTab;
-  return `<div class="card ${colKey === 'unknown' ? 'dim' : ''} ${alarm ? 'alarm' : ''} ${isFocused ? 'focused' : ''}" data-tab="${esc(c.tabId || '')}" title="Click to jump to this herdr tab" style="--dir-color:${dirColor(c.dir) || 'var(--card-edge)'}">
-    <div class="card-top">
-      <span class="ws-num">#${c.number ?? '·'}</span>
-      <span class="ws-label" title="${esc(c.cwd)}">${esc(c.label)}</span>
-      ${repoNote(c)}
-      ${badges}
+  const titleLine = card.title
+    ? `<div class="task-readout"><span class="state-lamp ${esc(card.status)}"></span><span class="task-copy" title="${esc(card.title)}">${esc(card.title)}</span>${card.cwd ? `<button type="button" class="hide-control" data-cwd="${esc(card.cwd)}" data-title="${esc(card.title)}" title="Hide this title (until the task changes)">×</button>` : ''}</div>`
+    : '';
+
+  return `<article class="flight-card ${columnKey === 'unknown' ? 'unknown-card' : ''} ${alarm ? 'alarm-card' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" title="Click to jump to this herdr tab" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}">
+    ${focused ? `<div class="focus-banner"><span>You are here</span><span>focused herdr tab</span></div>` : ''}
+    <div class="card-body">
+      <div class="card-head">
+        <div class="identity">
+          <span class="tail-number">#${card.number ?? '·'}</span>
+          <span class="label-stack">
+            <span class="session-label" title="${esc(card.cwd || card.label)}">${esc(card.label)}</span>
+            ${repo ? `<span class="repo-label" title="${esc(repo)}">${esc(repo)}</span>` : ''}
+          </span>
+        </div>
+        ${controlRack(card, expanded.has(card.id))}
+      </div>
+      ${alarm ? `<div class="alarm-annunciator" title="Must not stop, but idle"><span class="alarm-icon">!</span><span class="alarm-copy">Must run · signal idle</span><small>ATTN</small></div>` : ''}
+      ${card.note ? `<div class="operator-note"><span class="note-callout">Stop<br>crane</span><span class="note-copy" title="${esc(card.note)}">${esc(card.note)}</span></div>` : ''}
+      ${titleLine}
+      ${remoteLine}
+      ${retireLine}
+      <div class="telemetry">
+        <span class="datum vector"><b>Direction</b><span title="${esc(card.dir || 'unassigned')}">${esc(card.dir || 'unassigned')}</span></span>
+        <span class="datum window"><b>Window</b><span title="${esc(windowNote || '—')}">${esc(windowNote || '—')}</span></span>
+        <span class="datum age"><b>Stuck</b><span class="${ageClass}">${esc(displayedAge || '—')}</span></span>
+      </div>
     </div>
-    ${titleLine}
-    ${macLine}
-    ${retireLine}
-    ${c.note ? `<div class="noteline" title="${esc(c.note)}">${esc(c.note)}</div>` : ''}
-    <div class="card-meta">
-      ${alarm ? '<span class="alarm-note">should be working — but idle!</span>' : ''}
-      ${c.dir ? `<span>${esc(c.dir)}</span>` : ''}
-      ${wsNote}
-      ${a ? `<span class="age ${ageCls}">stuck ${a}</span>` : ''}
-    </div>
-  </div>`;
+  </article>`;
 }
 
-function miniCard(c, now) {
-  const a = age(c.since, now);
-  const isFocused = c.tabId && c.tabId === data.focusedTab;
-  return `<div class="card mini ${isFocused ? 'focused' : ''}" data-tab="${esc(c.tabId || '')}" title="${esc(c.title || '')}&#10;Click to jump; arrow expands" style="--dir-color:${dirColor(c.dir) || 'var(--card-edge)'}">
-    <span class="exp" data-id="${esc(c.id)}" title="Expand">▸</span>
-    <span class="ws-num">#${c.number ?? '·'}</span>
-    <span class="ws-label">${esc(c.label)}</span>
-    ${repoNote(c)}
-    ${c.star ? '<span class="mini-flag" style="color:#ffd257">★</span>' : ''}
-    ${c.note ? `<span class="mini-flag" style="color:var(--st-done)" title="${esc(c.note)}">⚑</span>` : ''}
-    ${c.prio ? `<span class="mini-flag prio ${esc(c.prio)}" style="cursor:default">${esc(c.prio)}</span>` : ''}
-    <span class="mini-age">${a ? a : ''}</span>
-  </div>`;
+function compactCard(card, options = {}) {
+  const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
+  const retire = data.retire?.[card.tabId];
+  const repo = repoText(card);
+  const canExpand = options.expand !== false;
+  const signals = [
+    card.note ? `<span class="signal note" title="${esc(card.note)}">⚑</span>` : '',
+    card.star ? `<span class="signal star" title="Must not stop">★</span>` : '',
+    card.prio ? `<span class="signal ${String(card.prio).toLowerCase()}">${esc(card.prio)}</span>` : '',
+    retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : ''
+  ].join('');
+  const actions = (card.cwd ? starControl(card) + prioControl(card) : '') + powerControl(card) + focusControl();
+  return `<article class="flight-card compact ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.title || card.note || card.label)}&#10;Click to jump; arrow expands">
+    ${focused ? `<div class="focus-banner"><span>You are here</span><span>focused herdr tab</span></div>` : ''}
+    <div class="compact-grid">
+      ${canExpand ? `<button type="button" class="expand-mini" data-expand="${esc(card.id)}" title="Expand idle card">▸</button>` : `<span class="state-lamp ${esc(card.status)}"></span>`}
+      <span class="compact-number">#${card.number ?? '·'}</span>
+      <span class="compact-main"><span class="compact-label">${esc(card.label)}</span>${repo ? `<span class="compact-repo">${esc(repo)}</span>` : ''}</span>
+      <span class="compact-signals">${signals}</span>
+      <span class="compact-age">${esc(age(card.since) || '')}</span>
+      <span class="compact-actions">${actions}</span>
+    </div>
+  </article>`;
 }
 
-function renderKanban(cards, now) {
+function renderKanban(cards) {
   const board = document.getElementById('board');
-  board.classList.remove('list'); // layout is driven by the class only, no inline styles
+  board.className = 'kanban';
+  // Keep each column's scroll position across re-renders.
   const scrolls = {};
-  board.querySelectorAll('.col-list').forEach(el => scrolls[el.dataset.col] = el.scrollTop);
+  board.querySelectorAll('.column-list').forEach(el => scrolls[el.dataset.column] = el.scrollTop);
 
-  board.innerHTML = data.columns.map(col => {
-    const inCol = cards
-      .filter(c => colOf(c, now) === col.key)
+  board.innerHTML = data.columns.map((column, index) => {
+    const inColumn = cards
+      .filter(card => columnOf(card) === column.key)
       .sort((a, b) =>
         (a.star ? 0 : 1) - (b.star ? 0 : 1) ||
         (PRIO_RANK[a.prio] ?? 9) - (PRIO_RANK[b.prio] ?? 9) ||
         (a.since || '9').localeCompare(b.since || '9') ||
-        a.number - b.number);
-    const cardsHtml = inCol.map(c => {
-      const alarm = c.star && c.status !== 'working' && !c.remote && !hasPulse(c, now);
-      const compact = col.key === 'idle' && !alarm && !expanded.has(c.id);
-      return compact ? miniCard(c, now) : fullCard(c, col.key, now);
+        a.number - b.number
+      );
+    const state = STATE[column.key] || STATE.unknown;
+    const cardsHtml = inColumn.map(card => {
+      const compact = column.key === 'idle' && !isAlarm(card) && !expanded.has(card.id);
+      return compact ? compactCard(card) : fullCard(card, column.key);
     }).join('');
-    return `<section class="col" style="--col-color:${COL_COLORS[col.key]}">
-      <div class="col-head"><span class="name">${esc(col.title)}</span><span class="count">${inCol.length}</span></div>
-      <div class="col-list" data-col="${col.key}">${cardsHtml}</div>
+    return `<section class="flight-column" style="--state:${state.color}">
+      <header class="column-head">
+        <span class="state-glyph">${state.glyph}</span>
+        <span class="column-title"><strong title="${esc(column.title)}">${esc(column.title)}</strong><small>${String(index + 1).padStart(2, '0')} / ${state.code}</small></span>
+        <span class="column-count">${String(inColumn.length).padStart(2, '0')}</span>
+      </header>
+      <div class="column-list" data-column="${esc(column.key)}">${cardsHtml}</div>
     </section>`;
   }).join('');
 
-  board.querySelectorAll('.col-list').forEach(el => {
-    if (scrolls[el.dataset.col]) el.scrollTop = scrolls[el.dataset.col];
+  board.querySelectorAll('.column-list').forEach(el => {
+    if (scrolls[el.dataset.column]) el.scrollTop = scrolls[el.dataset.column];
   });
 }
 
-// Team: one row per person — their herdr session plus tasks from state/team.json.
-function renderTeam(cards, now) {
-  const board = document.getElementById('board');
-  board.classList.add('list');
-  const team = data.team?.people ?? {};
-  const used = new Set();
-  const rows = [];
-
-  const personRow = (key, p) => {
-    const norm = s => String(s ?? '').toLowerCase();
-    const card = cards.find(c => norm(c.cwd).includes('\\people\\' + key) || norm(c.label) === key);
-    if (card) used.add(card.id);
-    const st = card ? card.status : null;
-    const lastW = card?.lastWorkingAt ? age(card.lastWorkingAt, now) : null;
-    const info = card
-      ? (st === 'working' ? 'session working'
-        : st === 'blocked' ? 'session waiting on you'
-        : lastW ? `session active ${lastW} ago` : 'session idle')
-      : 'no window';
-    const waiting = p?.waitingOnYou ?? [];
-    const wait = waiting.length;
-    const items = [];
-    if (waiting.length) {
-      items.push('<div class="tsec">waiting on you</div>');
-      for (const it of waiting) items.push(`<div class="titem wait">⚑ ${esc(it)}</div>`);
-    }
-    if (p?.deadlines?.length) {
-      items.push('<div class="tsec">deadlines</div>');
-      for (const it of p.deadlines) items.push(`<div class="titem deadline">⏰ ${esc(it)}</div>`);
-    }
-    if (p?.top?.length) {
-      items.push('<div class="tsec">on their plate</div>');
-      for (const it of p.top) items.push(`<div class="titem">• ${esc(it)}</div>`);
-    }
-    const isFocused = card && card.tabId === data.focusedTab;
-    return `<div class="trow ${expanded.has('p:' + key) ? 'open' : ''} ${isFocused ? 'focused' : ''}" data-tab="${esc(card?.tabId || '')}" data-exp="p:${esc(key)}">
-      <div class="trow-top">
-        <span class="exp" data-id="p:${esc(key)}">${expanded.has('p:' + key) ? '▾' : '▸'}</span>
-        <span class="dot ${esc(st || 'unknown')}"></span>
-        <span class="trow-name">${esc(p?.name || key)}</span>
-        <span class="trow-info">${esc(info)}${p?.trackerDate ? ` · tracker from ${esc(p.trackerDate)}` : ''}</span>
-        <span class="trow-right">
-          ${wait ? `<span class="wait-chip">waiting on you: ${wait}</span>` : ''}
-          ${p?.top?.length ? `<span>tasks: ${p.top.length}</span>` : ''}
-          ${card ? offBtnHtml(card) : ''}
-        </span>
-      </div>
-      <div class="trow-items">${items.join('') || '<div class="titem">nothing on the tracker</div>'}</div>
-    </div>`;
-  };
-
-  for (const key of Object.keys(team)) rows.push(personRow(key, team[key]));
-  // Team sessions not tied to a person (shared tabs and the like)
-  const rest = cards.filter(c => !used.has(c.id));
-  if (rest.length) {
-    rows.push('<div class="tsec" style="margin:10px 0 6px">Other team sessions</div>');
-    for (const c of rest) rows.push(miniCard(c, now));
-  }
-  board.innerHTML = rows.join('');
+// Team: one row per person — their herdr session plus tracker items.
+function personRow(key, person, cards, used) {
+  const normalize = value => String(value ?? '').toLowerCase();
+  const card = cards.find(item => normalize(item.cwd).includes(`\\people\\${key}`) || normalize(item.label) === key);
+  if (card) used.add(card.id);
+  const status = card ? card.status : null;
+  const lastWorking = card?.lastWorkingAt ? age(card.lastWorkingAt) : null;
+  const info = card
+    ? (status === 'working' ? 'session working'
+      : status === 'blocked' ? 'session waiting on you'
+      : lastWorking ? `session active ${lastWorking} ago` : 'session idle')
+    : 'no window';
+  const waiting = person?.waitingOnYou ?? [];
+  const deadlines = person?.deadlines ?? [];
+  const top = person?.top ?? [];
+  const openKey = `p:${key}`;
+  const isOpen = expanded.has(openKey);
+  const focused = Boolean(card && card.tabId === data.focusedTab);
+  const bay = (className, title, items, empty) => `<section class="detail-bay ${className}">
+    <h3><span>${title}</span><b>${String(items.length).padStart(2, '0')}</b></h3>
+    ${items.length ? `<ul class="detail-list">${items.map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : `<span class="empty-detail">${empty}</span>`}
+  </section>`;
+  return `<article class="person-row ${isOpen ? 'open' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card?.tabId || '')}" style="${stateStyle(status || 'unknown')}">
+    <div class="person-top">
+      <button type="button" class="person-expand" data-expand="${esc(openKey)}" aria-expanded="${isOpen}" title="${isOpen ? 'Collapse' : 'Expand'} person details">${isOpen ? '▾' : '▸'}</button>
+      <span class="person-status">${STATE[status]?.glyph || STATE.unknown.glyph}</span>
+      <span class="person-name"><strong>${esc(person?.name || key)}</strong><small>${card ? `TAB ${esc(card.tabId)}` : 'NO HERDR TAB'}</small></span>
+      <span class="person-info" title="${esc(info)}">${esc(info)}${person?.trackerDate ? ` · tracker ${esc(person.trackerDate)}` : ''}</span>
+      <span class="person-right">
+        ${waiting.length ? `<span class="roster-counter waiting"><span>waiting on you</span><b>${waiting.length}</b></span>` : ''}
+        ${top.length ? `<span class="roster-counter"><span>tasks</span><b>${top.length}</b></span>` : ''}
+        ${card ? powerControl(card) + focusControl() : ''}
+      </span>
+    </div>
+    <div class="person-details">
+      ${bay('action', 'Waiting on you', waiting, 'No operator actions')}
+      ${bay('deadline', 'Deadlines', deadlines, 'No recorded deadlines')}
+      ${bay('', 'On their plate', top, 'Nothing on the tracker')}
+    </div>
+  </article>`;
 }
 
-function renderMisc(cards, now) {
+function renderTeam(cards) {
   const board = document.getElementById('board');
-  board.classList.add('list');
+  board.className = 'list';
+  const people = data.team?.people ?? {};
+  const used = new Set();
+  const rows = Object.keys(people).map(key => personRow(key, people[key], cards, used));
+  const rest = cards.filter(card => !used.has(card.id));
+  const waitingTotal = Object.values(people).reduce((sum, person) => sum + (person.waitingOnYou?.length || 0), 0);
+  board.innerHTML = `<section class="list-shell">
+    <header class="list-masthead">
+      <span><h2>Team flight roster</h2><p>Tracker actions, deadlines and attached herdr sessions. Expand a row for the full manifest.</p></span>
+      <span class="mast-metric">${Object.keys(people).length} PEOPLE / ${waitingTotal} WAITING ON YOU</span>
+    </header>
+    <div class="roster">${rows.join('')}
+      ${rest.length ? `<div class="subsection-label">Other team sessions / ${rest.length}</div><div class="team-mini-stack">${rest.map(card => compactCard(card, { expand: false })).join('')}</div>` : ''}
+    </div>
+  </section>`;
+}
+
+function renderOther(cards) {
+  const board = document.getElementById('board');
+  board.className = 'list';
   const rows = cards
     .sort((a, b) => (a.since || '9').localeCompare(b.since || '9'))
-    .map(c => {
-      const a = age(c.since, now);
-      return `<div class="card mini" data-tab="${esc(c.tabId || '')}" style="--dir-color:${dirColor(c.dir) || 'var(--card-edge)'}">
-        <span class="ws-num">#${c.number ?? '·'}</span>
-        <span class="ws-label">${esc(c.label)}</span>
-        ${repoNote(c)}
-        <span class="trow-info" style="margin-left:6px">${esc(c.title || '')}</span>
-        <span class="mini-age">${a ? 'stuck ' + a : ''}</span>
-        ${offBtnHtml(c, 'confirmable')}
-      </div>`;
-    });
-  board.innerHTML = '<div class="tsec" style="margin:6px 0 10px">Windows herdr does not recognize. The ⏻ button saves memory and closes.</div>' + rows.join('');
+    .map(card => {
+      const status = card.status || 'unknown';
+      const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
+      const repo = repoText(card);
+      const retire = data.retire?.[card.tabId];
+      return `<article class="misc-row ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" title="Click to jump to this herdr tab" style="${stateStyle(status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}">
+        <span class="misc-state">#${card.number ?? '·'}</span>
+        <span class="misc-identity"><strong title="${esc(card.label)}">${esc(card.label)}</strong><small>${esc(repo || card.wsLabel || card.tabId)}</small></span>
+        <span class="misc-content">
+          <span class="misc-title" title="${esc(card.title || 'No reported task')}">${esc(card.title || 'No reported task')}</span>
+          ${card.note ? `<span class="misc-note" title="${esc(card.note)}">⚑ ${esc(card.note)}</span>` : ''}
+          ${retire ? `<span class="misc-note" title="${esc(retire.error || retire.phase)}">⏻ ${esc(retire.error || retire.phase)}</span>` : ''}
+        </span>
+        <span class="misc-meta"><span class="misc-age">${age(card.since) ? `stuck ${esc(age(card.since))}` : ''}</span>${powerControl(card)}${focusControl()}</span>
+      </article>`;
+    }).join('');
+  board.innerHTML = `<section class="list-shell">
+    <header class="list-masthead">
+      <span><h2>Unrecognized windows</h2><p>Herdr cannot classify these sessions. The ⏻ control saves memory and closes the window.</p></span>
+      <span class="mast-metric">${cards.length} NO-SIGNAL RECORDS</span>
+    </header>
+    <div class="manifest">${rows}</div>
+  </section>`;
+}
+
+function renderHeader(allViewCards) {
+  const counts = { mine: 0, team: 0, other: 0 };
+  for (const card of data.cards) counts[viewOf(card)] = (counts[viewOf(card)] ?? 0) + 1;
+  document.getElementById('views').innerHTML = VIEWS.map(key => `<button type="button" class="view-tab ${key === view ? 'on' : ''}" data-view="${key}" aria-pressed="${key === view}"><span>${VIEW_LABELS[key]}</span><span class="count">${counts[key] || 0}</span></button>`).join('');
+
+  const filters = document.getElementById('filters');
+  if (view === 'mine') {
+    const directions = [...new Set(allViewCards.map(card => card.dir).filter(Boolean))];
+    if (filter && !directions.includes(filter)) {
+      filter = '';
+      localStorage.setItem('board-filter', '');
+    }
+    filters.innerHTML = [`<button type="button" class="filter-key ${filter === '' ? 'on' : ''}" data-direction=""><span class="lamp" style="--dir:#7c91a4"></span>All</button>`]
+      .concat(directions.map(direction => `<button type="button" class="filter-key ${filter === direction ? 'on' : ''}" data-direction="${esc(direction)}"><span class="lamp" style="--dir:${dirColor(direction)}"></span>${esc(direction)}</button>`))
+      .join('');
+  } else {
+    filters.innerHTML = '';
+  }
+
+  const timestamp = new Date(data.generatedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const remote = data.remote?.tasks?.length ? ` / <strong>REMOTE ${esc(data.remote.tasks.join(', '))}</strong>` : '';
+  document.getElementById('readout').innerHTML = `SESSIONS ${data.cards.length} / WINDOWS ${data.windows} / UPDATED ${timestamp}${remote}`;
 }
 
 function render() {
   if (!data) return;
-  const now = Date.now();
+  NOW = Date.now();
 
-  const counts = { mine: 0, team: 0, other: 0 };
-  for (const c of data.cards) counts[viewOf(c)] = (counts[viewOf(c)] ?? 0) + 1;
-  document.getElementById('views').innerHTML = VIEWS.map(v =>
-    `<span class="viewtab ${v === view ? 'on' : ''}" data-view="${v}">${VIEW_LABEL[v]}<span class="n">${counts[v] ?? 0}</span></span>`).join('');
+  const allViewCards = data.cards.filter(card => viewOf(card) === view);
+  renderHeader(allViewCards);
+  const visibleCards = view === 'mine' ? allViewCards.filter(card => !filter || card.dir === filter) : allViewCards;
+  if (view === 'team') renderTeam(visibleCards);
+  else if (view === 'other') renderOther(visibleCards);
+  else renderKanban(visibleCards);
 
-  let cards = data.cards.filter(c => viewOf(c) === view);
-
-  const filtersEl = document.getElementById('filters');
-  if (view === 'mine') {
-    const dirs = [...new Set(cards.map(c => c.dir).filter(Boolean))];
-    if (filter && !dirs.includes(filter)) { filter = ''; localStorage.setItem('board-filter', ''); }
-    filtersEl.innerHTML =
-      [`<span class="chip ${filter === '' ? 'on' : ''}" data-dir="">all</span>`]
-        .concat(dirs.map(d =>
-          `<span class="chip ${filter === d ? 'on' : ''}" data-dir="${esc(d)}">` +
-          `<span class="dot" style="background:${dirColor(d) || 'var(--ink-faint)'}"></span>${esc(d)}</span>`))
-        .join('');
-    cards = cards.filter(c => !filter || c.dir === filter);
-  } else {
-    filtersEl.innerHTML = '';
-  }
-
-  if (view === 'team') renderTeam(cards, now);
-  else if (view === 'other') renderMisc(cards, now);
-  else renderKanban(cards, now);
-
-  // focus changed inside herdr — scroll to the highlighted card
+  // Focus changed inside herdr — scroll to the highlighted card.
   if (data.focusedTab && data.focusedTab !== lastFocusedTab) {
     lastFocusedTab = data.focusedTab;
-    const el = document.querySelector('.card.focused, .trow.focused');
+    const el = document.querySelector('.flight-card.focused, .person-row.focused, .misc-row.focused');
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
-
-  const t = new Date(data.generatedAt);
-  const remoteInfo = data.remote?.tasks?.length ? ` · second machine: ${data.remote.tasks.join(', ')}` : '';
-  document.getElementById('updated').textContent =
-    `sessions: ${data.cards.length} · windows: ${data.windows}${remoteInfo} · updated ` +
-    t.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function showError(msg) {
@@ -551,29 +1521,30 @@ async function setField(cwd, patch, apply) {
 }
 
 document.addEventListener('click', async (ev) => {
-  const vt = ev.target.closest('.viewtab');
+  const vt = ev.target.closest('.view-tab');
   if (vt) {
     view = vt.dataset.view;
     localStorage.setItem('board-view', view);
     render();
     return;
   }
-  const chip = ev.target.closest('.chip');
+  const chip = ev.target.closest('.filter-key');
   if (chip) {
-    filter = chip.dataset.dir;
+    filter = chip.dataset.direction;
     localStorage.setItem('board-filter', filter);
     render();
     return;
   }
-  const exp = ev.target.closest('.exp');
+  const exp = ev.target.closest('[data-expand]');
   if (exp) {
-    const id = exp.dataset.id;
+    const id = exp.dataset.expand;
     if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
     render();
     return;
   }
-  const off = ev.target.closest('.off');
-  if (off && off.dataset.tab) {
+  const off = ev.target.closest('.power-control');
+  if (off) {
+    if (!off.dataset.tab) return;
     clearTimeout(pendingOffTimer);
     if (pendingOff !== off.dataset.tab) {
       pendingOff = off.dataset.tab;
@@ -599,31 +1570,31 @@ document.addEventListener('click', async (ev) => {
     refresh(true);
     return;
   }
-  const star = ev.target.closest('.star');
+  const star = ev.target.closest('.star-control');
   if (star && star.dataset.cwd) {
     const on = !star.dataset.star;
     setField(star.dataset.cwd, { star: on || null }, c => { c.star = on; });
     return;
   }
-  const kind = ev.target.closest('.kind');
+  const kind = ev.target.closest('.kind-control');
   if (kind && kind.dataset.cwd) {
     const next = KIND_NEXT[kind.dataset.kind] ?? 'temp';
     setField(kind.dataset.cwd, { kind: next || null }, c => { c.kind = next || null; });
     return;
   }
-  const hide = ev.target.closest('.hidebtn');
+  const hide = ev.target.closest('.hide-control');
   if (hide && hide.dataset.cwd) {
     const t = hide.dataset.title;
     setField(hide.dataset.cwd, { hideTitle: t }, c => { if (c.title === t) c.title = ''; });
     return;
   }
-  const prio = ev.target.closest('.prio');
+  const prio = ev.target.closest('.prio-control');
   if (prio && prio.dataset.cwd) {
     const next = PRIO_NEXT[prio.dataset.prio] || 'P1';
     setField(prio.dataset.cwd, { prio: next }, c => { c.prio = next; });
     return;
   }
-  const card = ev.target.closest('.card, .trow');
+  const card = ev.target.closest('[data-tab]');
   if (card && card.dataset.tab) {
     try {
       const r = await fetch('/focus', {
@@ -638,15 +1609,15 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
-// Chrome throttles timers of covered windows — refresh right away on return
+// Chrome throttles timers of covered windows — refresh right away on return.
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refresh(true);
 });
 window.addEventListener('focus', () => refresh(true));
 
 // Screenshot-testing helper: ?view=mine&then=team — render the first
-// tab, then switch to the second one after a second and a half.
-const thenView = new URLSearchParams(location.search).get('then');
+// view, then switch to the second one after a second and a half.
+const thenView = query.get('then');
 if (thenView && VIEWS.includes(thenView)) {
   setTimeout(() => { view = thenView; render(); }, 1500);
 }
