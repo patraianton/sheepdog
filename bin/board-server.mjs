@@ -24,12 +24,15 @@ const HERDR_CANDIDATES = [
 ];
 
 const KNOWN_STATUSES = new Set(['blocked', 'done', 'working', 'idle', 'unknown']);
+// Mine columns answer "what do I do with this", not "what did herdr say" —
+// the herdr state stays on the card as a lamp. Assignment logic lives in the
+// page (roleColumnOf); the server only stores the manual fields.
 const COLUMNS = [
-  { key: 'blocked', title: 'Blocked — needs you' },
-  { key: 'done',    title: 'Done — review' },
-  { key: 'working', title: 'Working' },
-  { key: 'idle',    title: 'Idle' },
-  { key: 'unknown', title: 'Unknown' },
+  { key: 'decisions', title: 'Decisions — on you' },
+  { key: 'focus',     title: 'Focus' },
+  { key: 'running',   title: 'Running' },
+  { key: 'tools',     title: 'Tools' },
+  { key: 'parked',    title: 'Parked' },
 ];
 
 function herdr(args) {
@@ -375,6 +378,9 @@ async function collect() {
       prio: proj?.prio ?? null,
       star: proj?.star === true,
       kind: proj?.kind ?? null,
+      role: proj?.role ?? null,
+      focus: proj?.focus === true,
+      checkDate: proj?.checkDate ?? null,
       view: proj?.view ?? null,
       note: proj?.note ?? null,
       remote: onRemote(cwd),
@@ -408,6 +414,9 @@ const FIELD_CHECK = {
   prio: v => v === null || ['P1', 'P2', 'P3'].includes(v),
   star: v => v === null || typeof v === 'boolean',
   kind: v => v === null || ['temp', 'ongoing', 'cron'].includes(v),
+  role: v => v === null || ['run', 'tool', 'parked'].includes(v),
+  focus: v => v === null || typeof v === 'boolean',
+  checkDate: v => v === null || /^\d{4}-\d{2}-\d{2}$/.test(String(v)),
   view: v => v === null || ['mine', 'team', 'other'].includes(v),
   hideTitle: v => v === null || (typeof v === 'string' && v.length <= 300),
   note: v => v === null || (typeof v === 'string' && v.length <= 300),

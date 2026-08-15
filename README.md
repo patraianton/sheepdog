@@ -10,9 +10,19 @@ session straight from herdr and lays it out as a kanban:
 
 - **Card = session.** One open agent session, one card. Nothing is merged or
   entered by hand — herdr is the source of truth.
-- **Columns = agent states:** working / blocked (needs you) / done (awaiting
-  your review) / idle / unknown. Cards move by themselves as agents work;
-  you never drag them.
+- **Columns = what to do with it, not what the agent said.** *Decisions* (an
+  open review page, a blocked session or an arrived check-back date — always
+  first), *Focus* (the cards you picked for deep work), *Running* (long
+  processes; sprints bother you only at checkpoints, starred and cron ones
+  live here too), *Tools* (maintenance, thin rows, never alarms), *Parked*
+  (consciously paused, thin rows). The raw herdr state stays on every card
+  as a lamp. Unassigned cards sort themselves: working → Running, silent →
+  Parked. Cards move by themselves; you never drag them.
+- **Deep focus.** A header toggle that hides everything except the cards you
+  picked with ◎ — star alarms included. The pick survives reloads.
+- **Check-back dates.** A card can carry "check on DD.MM" (presets +3 d /
+  +1 week / +2 weeks). Until the date it waits as a thin Parked row; on the
+  day it surfaces in Decisions by itself.
 - **Refreshes every 3 seconds.** The "stuck for N h" timer shows how long a
   card has been sitting in its current state.
 - **Click a card to jump there.** The board focuses that herdr tab; the tab
@@ -24,9 +34,10 @@ session straight from herdr and lays it out as a kanban:
   a life-direction tag for color-coding, a "must not stop" star (the card
   turns red if a starred session goes quiet), a kind — temporary (⏱),
   ongoing (∞) or cron-driven (↻, work happens on a schedule so an idle
-  session is fine) — and a short note. All of it is set by clicking on the
-  card and stored in `state/projects.json`, keyed by the session's working
-  directory.
+  session is fine) — a role (runs / tool / parked, or auto), a deep-focus
+  pick (◎), a check-back date and a short note. All of it is set by clicking
+  on the card and stored in `state/projects.json`, keyed by the session's
+  working directory.
 - **Power button on a card** (⏻, asks "sure?") tells the session to save
   everything important to the project's memory and commit, waits for it to
   finish, logs the window to `state/closed.jsonl`, then closes it. If the
