@@ -92,6 +92,35 @@ in the same file overrides the list.
 - All board state lives in `state/` (gitignored) as small JSON files you can
   read and edit by hand.
 
+## Handing a task to a worker agent
+
+`bin/teammate.mjs` is the other half of the same idea: instead of watching
+sessions you opened by hand, an agent session opens one itself.
+
+```
+node bin\teammate.mjs new "Rewrite the CSV parser, keep the tests green"
+node bin\teammate.mjs check
+node bin\teammate.mjs close tm-0814-223149
+```
+
+`new` creates a tab in the window it is run from, starts a coding agent there
+with a written brief, and records the tab, the pane and the folder in
+`state/teammates/`. The worker reports by appending one-line updates
+(`working: …`, `needs-decision: …`, `done: …`) to its own status file, so
+`check` is a single cheap pass that costs no agent tokens: it prints only what
+wants your attention and exits 1 when something does. `close` refuses to touch
+anything it cannot prove is still the tab it opened, and erases the record only
+after herdr answers that the pane is gone.
+
+With `--tree`, the worker also gets its own pooled git worktree: teammate
+leases a copy of the repository from treehouse and puts it on a fresh branch
+named after the worker (`tm-…`) cut from the captain's current commit, so parallel workers never
+collide on files. The copy is wiped when it goes back to the pool at close —
+only commits survive — so `close` refuses while uncommitted changes sit in it,
+then reports how many commits landed on the branch and how to merge them.
+
+See `docs/teammate.md`.
+
 ## How it talks to herdr
 
 See `docs/herdr-api.md` — a field guide to the herdr CLI surface the board
