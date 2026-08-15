@@ -416,7 +416,13 @@ const FIELD_CHECK = {
   kind: v => v === null || ['temp', 'ongoing', 'cron'].includes(v),
   role: v => v === null || ['run', 'tool', 'parked'].includes(v),
   focus: v => v === null || typeof v === 'boolean',
-  checkDate: v => v === null || /^\d{4}-\d{2}-\d{2}$/.test(String(v)),
+  checkDate: v => {
+    if (v === null) return true;
+    if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+    const t = Date.parse(v);
+    // The round-trip rejects day-overflow dates like 2026-02-31.
+    return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === v;
+  },
   view: v => v === null || ['mine', 'team', 'other'].includes(v),
   hideTitle: v => v === null || (typeof v === 'string' && v.length <= 300),
   note: v => v === null || (typeof v === 'string' && v.length <= 300),

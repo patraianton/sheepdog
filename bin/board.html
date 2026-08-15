@@ -121,6 +121,7 @@
     font-weight: 800;
     letter-spacing: .09em;
     text-transform: uppercase;
+    white-space: nowrap;
   }
   .view-tab:last-child { border-right: 0; }
   .view-tab:hover { color: var(--ink); background: #182331; }
@@ -1145,7 +1146,8 @@
   }
 
   @container (max-width: 230px) {
-    .column-head { min-height: 49px; }
+    /* 54px covers a two-line title, so one- and two-line heads stay level. */
+    .column-head { min-height: 54px; }
     .identity { grid-template-columns: 27px minmax(0, 1fr); gap: 5px; }
     .tail-number { width: 27px; min-height: 25px; }
     .session-label { font-size: 12px; }
@@ -1196,7 +1198,7 @@
         "brand readout"
         "views views";
     }
-    #views { width: min(100%, 390px); }
+    #views { width: fit-content; max-width: 100%; }
     .view-tab { flex: 1; justify-content: center; }
     #filters { justify-content: flex-start; }
   }
@@ -1297,7 +1299,15 @@ let view = query.get('view') || localStorage.getItem('board-view') || 'mine';
 if (!VIEWS.includes(view)) view = 'mine';
 // Deep focus: only the ◎-picked cards, everything else silenced. The pick
 // itself lives in projects.json (survives reloads); the mode is per-browser.
-let deepFocus = query.get('deep') === '1' || localStorage.getItem('board-deep') === '1';
+// An explicit ?deep=1/0 wins once and is then consumed from the address bar,
+// so later reloads answer to localStorage (and the toggle) alone.
+const deepParam = query.get('deep');
+let deepFocus = deepParam !== null ? deepParam === '1' : localStorage.getItem('board-deep') === '1';
+if (deepParam !== null) {
+  localStorage.setItem('board-deep', deepFocus ? '1' : '');
+  query.delete('deep');
+  history.replaceState(null, '', location.pathname + ([...query].length ? '?' + query.toString() : ''));
+}
 let lastFocusedTab = null;
 let pageVersion = null;
 let pendingOff = null;
@@ -1348,12 +1358,13 @@ function roleColumnOf(card) {
   return card.status === 'working' || card.remote || hasPulse(card) ? 'running' : 'parked';
 }
 
-// Which columns show a card as a thin row: Tools and Parked always, Running
-// when the process is between wakeups. Alarms always get the full card.
+// Which columns show a card as a thin row: Tools, Parked and Running while
+// the process rests. Anything alive right now — working, remote, pulsing,
+// finished-unseen (done) or alarming — keeps the full card, so its herdr
+// lamp stays visible whatever column the role put it in.
 function thinCard(card, columnKey) {
-  if (columnKey === 'tools' || columnKey === 'parked') return !isAlarm(card);
-  if (columnKey === 'running') return !(card.status === 'working' || card.remote || hasPulse(card) || isAlarm(card));
-  return false;
+  if (columnKey !== 'tools' && columnKey !== 'parked' && columnKey !== 'running') return false;
+  return !(card.status === 'working' || card.status === 'done' || card.remote || hasPulse(card) || isAlarm(card));
 }
 
 function isAlarm(card) {
@@ -1437,10 +1448,10 @@ function dateControl(card) {
 // The whole card is a jump-to-tab button, so the full rack spends no slot on ⊕.
 function controlRack(card, allowCollapse) {
   const power = powerControl(card);
-  if (!card.cwd) return `<div class="control-rack">${power}${focusControl()}</div>`;
   const collapse = allowCollapse
     ? `<button type="button" class="control expand-control" data-expand="${esc(card.id)}" title="Collapse to a thin row">▴</button>`
     : '';
+  if (!card.cwd) return `<div class="control-rack">${collapse}${power}${focusControl()}</div>`;
   return `<div class="control-rack">${collapse}${focusPickControl(card)}${starControl(card)}${kindControl(card)}${roleControl(card)}${prioControl(card)}${dateControl(card)}${power}</div>`;
 }
 
@@ -1510,8 +1521,13 @@ function compactCard(card, options = {}) {
   const canExpand = options.expand !== false;
   // Rare signals first, then three fixed slots: an unset flag, star or priority
   // still holds its place, so the priority chips line up down the column.
+  // The lavish chip lives OUTSIDE the hover-hidden signals group: hovering the
+  // row swaps signals for actions, and a chip that hides on approach can never
+  // be clicked.
+  const lavishChip = (card.lavish ?? []).length
+    ? `<span class="signal lavish" data-lavish-url="${esc(card.lavish[0].url)}" title="Lavish review: ${esc(card.lavish.map(a => a.name).join(', '))}">◈</span>`
+    : '';
   const signals = [
-    (card.lavish ?? []).length ? `<span class="signal lavish" data-lavish-url="${esc(card.lavish[0].url)}" title="Lavish review: ${esc(card.lavish.map(a => a.name).join(', '))}">◈</span>` : '',
     retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : '',
     card.checkDate ? `<span class="signal date" title="Check back on ${esc(card.checkDate)}">${esc(shortDate(card.checkDate))}</span>` : '',
     card.kind ? `<span class="signal kind" title="Kind: ${esc(card.kind)}">${KIND_LABEL[card.kind]}</span>` : '',
@@ -1519,14 +1535,19 @@ function compactCard(card, options = {}) {
     card.star ? `<span class="signal star" title="Must not stop">★</span>` : '<span class="signal slot-empty"></span>',
     card.prio ? `<span class="signal ${String(card.prio).toLowerCase()}">${esc(card.prio)}</span>` : '<span class="signal slot-empty"></span>'
   ].join('');
-  const actions = (card.cwd ? focusPickControl(card) + starControl(card) + roleControl(card) + prioControl(card) + dateControl(card) : '') + powerControl(card) + focusControl();
+  // Role, ◎ and the check-back date only surface on the Mine kanban — a team
+  // row offering them would store state no view ever shows.
+  const mine = viewOf(card) === 'mine';
+  const actions = (card.cwd
+    ? (mine ? focusPickControl(card) : '') + starControl(card) + (mine ? roleControl(card) : '') + prioControl(card) + (mine ? dateControl(card) : '')
+    : '') + powerControl(card) + focusControl();
   return `<article class="flight-card compact ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.title || card.note || card.label)}&#10;Click to jump; arrow expands">
     ${focused ? `<div class="focus-banner"><span>You are here</span><span>focused herdr tab</span></div>` : ''}
     <div class="compact-grid">
       ${canExpand ? `<button type="button" class="expand-mini" data-expand="${esc(card.id)}" title="Expand idle card">▸</button>` : `<span class="state-lamp ${esc(card.status)}"></span>`}
       <span class="compact-number">#${card.number ?? '·'}</span>
       <span class="compact-main"><span class="compact-label">${esc(card.label)}</span><span class="compact-repo">${esc(repo)}</span></span>
-      <span class="compact-right"><span class="compact-signals">${signals}</span><span class="compact-actions">${actions}</span></span>
+      <span class="compact-right">${lavishChip}<span class="compact-signals">${signals}</span><span class="compact-actions">${actions}</span></span>
       <span class="compact-age">${esc(age(card.since) || '')}</span>
     </div>
   </article>`;
@@ -1688,7 +1709,7 @@ function renderHeader(allViewCards) {
     + `<button type="button" class="view-tab deep-toggle ${deepFocus ? 'on' : ''}" id="deepfocus" aria-pressed="${deepFocus}" title="Deep focus: show only ◎-picked cards, silence everything else"><span>◎ Focus</span><span class="count">${picked}</span></button>`;
 
   const filters = document.getElementById('filters');
-  if (view === 'mine') {
+  if (view === 'mine' && !deepFocus) {
     const directions = [...new Set(allViewCards.map(card => card.dir).filter(Boolean))];
     if (filter && !directions.includes(filter)) {
       filter = '';
@@ -1721,7 +1742,9 @@ function render() {
   const visibleCards = view === 'mine' ? allViewCards.filter(card => !filter || card.dir === filter) : allViewCards;
   if (view === 'team') renderTeam(visibleCards);
   else if (view === 'other') renderOther(visibleCards);
-  else if (deepFocus) renderDeepFocus(visibleCards);
+  // Deep focus ignores the direction filter: the contract is "all picked
+  // cards, nothing else", and the header badge counts the same set.
+  else if (deepFocus) renderDeepFocus(allViewCards);
   else renderKanban(visibleCards);
 
   // Focus changed inside herdr — scroll to the highlighted card.
@@ -1776,11 +1799,18 @@ async function refresh(force) {
 }
 
 // Check-back date cycles through presets: off → +3 days → +1 week → +2 weeks → off.
+// Days are added in calendar space (setDate), so a DST hour shift cannot move
+// the stored date by a day.
 function nextCheckDate(current) {
-  if (!current) return localDate(NOW + 3 * 86400000);
+  const plus = (days) => {
+    const d = new Date(NOW);
+    d.setDate(d.getDate() + days);
+    return localDate(d.getTime());
+  };
+  if (!current) return plus(3);
   const diff = Math.round((new Date(current + 'T12:00') - NOW) / 86400000);
-  if (diff <= 3) return localDate(NOW + 7 * 86400000);
-  if (diff <= 7) return localDate(NOW + 14 * 86400000);
+  if (diff <= 3) return plus(7);
+  if (diff <= 7) return plus(14);
   return null;
 }
 
@@ -1813,6 +1843,12 @@ document.addEventListener('click', async (ev) => {
   if (deep) {
     deepFocus = !deepFocus;
     localStorage.setItem('board-deep', deepFocus ? '1' : '');
+    // The mode lives on the Mine kanban — arming it elsewhere must act now,
+    // not fire silently on some later return to Mine.
+    if (deepFocus && view !== 'mine') {
+      view = 'mine';
+      localStorage.setItem('board-view', view);
+    }
     render();
     return;
   }
