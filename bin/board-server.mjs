@@ -261,6 +261,7 @@ function parseLavishSessions(out) {
       if (at === -1) continue;
       artifacts.push({
         folder: file.slice(0, at),
+        file,
         name: path.basename(file).replace(/\.html?$/i, ''),
         url: JSON.parse(m[3]),
         pending: Number(m[4]) || 0,
@@ -276,7 +277,13 @@ async function refreshLavish() {
   try {
     const out = await lavishCliOutput();
     if (out === null) { lavishState = { checkedAt: Date.now(), ok: false, artifacts: [] }; return; }
-    lavishState = { checkedAt: Date.now(), ok: true, artifacts: parseLavishSessions(out) };
+    const artifacts = parseLavishSessions(out);
+    // The page file's mtime decides which review is the current one — the CLI
+    // session table carries no timestamps.
+    await Promise.all(artifacts.map(async (a) => {
+      a.mtime = await stat(a.file).then(s => s.mtimeMs).catch(() => 0);
+    }));
+    lavishState = { checkedAt: Date.now(), ok: true, artifacts };
   } finally { lavishChecking = false; }
 }
 
@@ -309,21 +316,23 @@ async function collect() {
 
   // Each lavish artifact goes to the DEEPEST card folder that contains it —
   // a review page in team-ops lands on the team-ops card, not on every subcard.
+  // A card shows exactly ONE page — the latest actual one: an open page means
+  // "blocked on the operator", and an older page next to it is history, not a
+  // second decision (operator's rule, 2026-08-15).
   const cardCwds = [...new Set(panes.map(p => normPath(p.cwd)).filter(Boolean))];
   const lavishByCwd = new Map();
-  const lavishUnattached = [];
+  const newestUnattached = new Map();
   for (const a of lavishState.artifacts) {
     let best = '';
     for (const c of cardCwds) {
       if ((a.folder === c || a.folder.startsWith(c + '\\')) && c.length > best.length) best = c;
     }
-    if (best) {
-      if (!lavishByCwd.has(best)) lavishByCwd.set(best, []);
-      lavishByCwd.get(best).push({ name: a.name, url: a.url, pending: a.pending });
-    } else {
-      lavishUnattached.push(a);
-    }
+    const bucket = best ? lavishByCwd : newestUnattached;
+    const key = best || a.folder;
+    if (!bucket.has(key) || (a.mtime ?? 0) > (bucket.get(key).mtime ?? 0)) bucket.set(key, a);
   }
+  for (const [k, a] of lavishByCwd) lavishByCwd.set(k, [{ name: a.name, url: a.url, pending: a.pending }]);
+  const lavishUnattached = [...newestUnattached.values()];
 
   await queued(async () => {
     updateSeen(seen, panes, now);
@@ -386,7 +395,7 @@ async function collect() {
     remote: { ok: remoteState.ok, tasks: remoteState.hints },
     lavish: {
       ok: lavishState.ok,
-      total: lavishState.artifacts.length,
+      total: lavishByCwd.size + lavishUnattached.length,
       unattached: lavishUnattached.map(a => ({ name: a.name, url: a.url, pending: a.pending, folder: a.folder })),
     },
     retire: Object.fromEntries(retireJobs),
