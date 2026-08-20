@@ -13,12 +13,14 @@ session straight from herdr and lays it out as a kanban:
 - **Columns = what to do with it, not what the agent said.** *Decisions* (an
   open review page, a blocked session or an arrived check-back date — always
   first; a review page counts only while it is the session's last word — once
-  the session works past it, the page is history, not a blocker), *Focus* (the cards you picked for deep work), *Running* (long
-  processes; sprints bother you only at checkpoints, starred and cron ones
-  live here too), *Tools* (maintenance, thin rows, never alarms), *Parked*
-  (consciously paused, thin rows). The raw herdr state stays on every card
-  as a lamp. Unassigned cards sort themselves: working → Running, silent →
-  Parked. Cards move by themselves; you never drag them.
+  the session works past it, the page is history, not a blocker), *Focus* (the cards you picked for deep work), *Running* (what actually
+  runs: live sessions on top — starred first, with a green LIVE highlight —
+  cron work resting between wakeups, and a stalled starred card as the red
+  alarm), *Tools* (maintenance, thin rows, never alarms), *Parked*
+  (consciously paused or simply stopped — a "runs" role without a live
+  agent waits here until brought back). The raw herdr state stays on every
+  card as a lamp. In every column whatever is running right now floats to
+  the top. Cards move by themselves; you never drag them.
 - **Deep focus.** A header toggle that hides everything except the cards you
   picked with ◎ — star alarms included. The pick survives reloads.
 - **Check-back dates.** A card can carry "check on DD.MM" (presets +3 d /
