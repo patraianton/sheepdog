@@ -1388,13 +1388,14 @@ function roleColumnOf(card) {
   if (card.focus) return 'focus';
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
-  // Running holds what actually RUNS: live sessions, cron work (idle between
-  // wakeups is normal) and starred cards — a stalled star stays here as the
-  // red alarm. A role of "run" without a live agent is a stopped process and
-  // waits in Parked until brought back (operator, 2026-08-20: "Running
-  // showed 14 cards while three projects were actually working").
+  // Running holds ONLY what actually runs: live sessions and cron work (idle
+  // between wakeups is normal). A stalled star is an action on the operator —
+  // bring it back or unstar — so its red alarm sits in Decisions. Everything
+  // else without a live agent (a "runs" role included) is a stopped process
+  // and waits in Parked until brought back (operator, 2026-08-20).
   const live = card.status === 'working' || card.remote || hasPulse(card);
-  return live || card.star || card.kind === 'cron' ? 'running' : 'parked';
+  if (live || card.kind === 'cron') return 'running';
+  return card.star ? 'decisions' : 'parked';
 }
 
 // Which columns show a card as a thin row: Tools, Parked and Running while
