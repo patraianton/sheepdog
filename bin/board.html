@@ -1411,10 +1411,15 @@ function shortDate(iso) {
   return iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : '';
 }
 
-// Decisions win over everything: an open review page, a blocked session and
-// an arrived check-back date all mean "this waits on the operator".
+// Decisions hold only what is actually asking the operator something: a LIVE
+// session that stands (blocked, holding a review page, or starred and waiting
+// for his word), or an arrived check-back date — his own hand-set reminder,
+// which fires with or without a session. A window whose session is not even
+// loaded asks nothing (operator, 2026-08-21): it parks in Standby whatever
+// pages or stars it carries — they stay visible on the parked card.
 function roleColumnOf(card) {
-  if ((card.lavish ?? []).length || card.status === 'blocked' || dateDue(card)) return 'decisions';
+  if (dateDue(card)) return 'decisions';
+  if (card.agent && ((card.lavish ?? []).length || card.status === 'blocked')) return 'decisions';
   if (card.focus) return 'focus';
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
