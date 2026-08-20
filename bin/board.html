@@ -1411,15 +1411,13 @@ function shortDate(iso) {
   return iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : '';
 }
 
-// Decisions hold only what is actually asking the operator something: a LIVE
-// session that stands (blocked, holding a review page, or starred and waiting
-// for his word), or an arrived check-back date — his own hand-set reminder,
-// which fires with or without a session. A window whose session is not even
-// loaded asks nothing (operator, 2026-08-21): it parks in Standby whatever
-// pages or stars it carries — they stay visible on the parked card.
+// Decisions hold only LIVE sessions that are asking the operator something:
+// blocked, holding a review page, an arrived check-back date, or starred and
+// waiting for his word. A window whose session is not even loaded asks
+// nothing (operator, 2026-08-21) — no page, date or star changes that: it
+// parks in Standby with all its signals still visible on the card.
 function roleColumnOf(card) {
-  if (dateDue(card)) return 'decisions';
-  if (card.agent && ((card.lavish ?? []).length || card.status === 'blocked')) return 'decisions';
+  if (card.agent && ((card.lavish ?? []).length || card.status === 'blocked' || dateDue(card))) return 'decisions';
   if (card.focus) return 'focus';
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
