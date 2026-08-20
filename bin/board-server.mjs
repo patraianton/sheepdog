@@ -62,6 +62,19 @@ function normPath(p) {
   return s;
 }
 
+// A linked worktree's checked-out branch: .git file -> gitdir -> HEAD, no git
+// process spawned. Returns null for detached heads and plain checkouts.
+async function worktreeBranch(checkoutPath) {
+  try {
+    const dotGit = await readFile(path.join(checkoutPath, '.git'), 'utf8');
+    const m = dotGit.match(/^gitdir:\s*(.+?)\s*$/m);
+    if (!m) return null;
+    const head = await readFile(path.join(m[1], 'HEAD'), 'utf8');
+    const r = head.match(/refs\/heads\/(.+?)\s*$/);
+    return r ? r[1] : null;
+  } catch { return null; }
+}
+
 // Queue: all state-file writes go one at a time, no races.
 let queueTail = Promise.resolve();
 function queued(fn) {
@@ -301,9 +314,30 @@ async function collect() {
     readJsonSoft(REMOTE_FILE, {}),
   ]);
   const repoByWs = new Map();
-  for (const w of wsListRes?.result?.workspaces ?? []) {
+  // Linked worktrees only: a plain checkout also carries worktree.repo_name,
+  // and the page must not paint it with the TREE / worktree mark.
+  const linkedWs = new Set();
+  const wsList = wsListRes?.result?.workspaces ?? [];
+  for (const w of wsList) {
     if (w.worktree?.repo_name) repoByWs.set(w.workspace_id, w.worktree.repo_name);
+    if (w.worktree?.is_linked_worktree) linkedWs.add(w.workspace_id);
   }
+  // A worktree window nobody renamed (label = folder name) is named by its
+  // BRANCH: the folder is where the work sits, the branch is what the work IS,
+  // and the operator thinks in branches — the user-login folder holding the
+  // cabinet-header branch must show as cabinet-header (operator's rule,
+  // 2026-08-20). A hand-renamed window keeps its name.
+  const branchNameByWs = new Map();
+  await Promise.all(wsList
+    .filter(w => w.worktree?.is_linked_worktree && w.worktree.checkout_path)
+    .map(async (w) => {
+      const branch = await worktreeBranch(w.worktree.checkout_path);
+      const folder = path.basename(w.worktree.checkout_path);
+      if (branch && (w.label ?? '').toLowerCase() === folder.toLowerCase()
+        && branch.toLowerCase() !== folder.toLowerCase()) {
+        branchNameByWs.set(w.workspace_id, branch);
+      }
+    }));
   // Active folders: hints from the second machine, translated to local paths.
   const remotePrefixes = [];
   for (const hint of remoteState.hints) {
@@ -317,12 +351,35 @@ async function collect() {
   const tabById = new Map((snap.tabs ?? []).map(t => [t.tab_id, t]));
   const panes = snap.panes ?? [];
 
+  // After a restart herdr restores every window but no agent is attached yet
+  // (agent_status "unknown"). Those windows are still cards — the fleet must
+  // stay visible while the operator brings sessions back (operator's rule,
+  // 2026-08-20). The only pane hidden is a bare shell SPLIT next to another
+  // pane of the same folder in the SAME tab: one tab, one card. Distinct tabs
+  // are distinct restored sessions and each keeps its card (the focused tab
+  // always has one). Within a tab the agent pane wins, then the lowest pane
+  // id — a stable pick, so a card never flips identity between polls. A pane
+  // with no folder is never anyone's duplicate.
+  const paneRank = (p) => `${p.agent ? 0 : 1}|${p.pane_id}`;
+  const bestInTab = new Map();
+  for (const p of panes) {
+    const cwd = normPath(p.cwd);
+    if (!cwd) continue;
+    const key = `${p.tab_id}|${cwd}`;
+    const cur = bestInTab.get(key);
+    if (!cur || paneRank(p) < paneRank(cur)) bestInTab.set(key, p);
+  }
+  const cardPanes = panes.filter(p => {
+    const cwd = normPath(p.cwd);
+    return !cwd || bestInTab.get(`${p.tab_id}|${cwd}`) === p;
+  });
+
   // Each lavish artifact goes to the DEEPEST card folder that contains it —
   // a review page in team-ops lands on the team-ops card, not on every subcard.
   // A card shows exactly ONE page — the latest actual one: an open page means
   // "blocked on the operator", and an older page next to it is history, not a
   // second decision (operator's rule, 2026-08-15).
-  const cardCwds = [...new Set(panes.map(p => normPath(p.cwd)).filter(Boolean))];
+  const cardCwds = [...new Set(cardPanes.map(p => normPath(p.cwd)).filter(Boolean))];
   const lavishByCwd = new Map();
   const newestUnattached = new Map();
   for (const a of lavishState.artifacts) {
@@ -343,7 +400,7 @@ async function collect() {
   });
 
   const JUNK_TITLES = new Set(['Claude Code', 'claude · resume', 'codex · resume']);
-  const cards = panes.map((p) => {
+  const cards = cardPanes.map((p) => {
     const ws = wsById.get(p.workspace_id);
     const tab = tabById.get(p.tab_id);
     const status = KNOWN_STATUSES.has(p.agent_status) ? p.agent_status : 'unknown';
@@ -354,7 +411,8 @@ async function collect() {
     // Nameless tabs ("1", "2") don't count as names.
     const multiTab = (ws?.tab_count ?? 1) > 1;
     const tabName = tab?.label && !/^\d+$/.test(tab.label) ? tab.label : null;
-    const label = (multiTab ? tabName : null) || ws?.label || tab?.label || '';
+    const wsName = branchNameByWs.get(p.workspace_id) ?? ws?.label ?? '';
+    const label = (multiTab ? tabName : null) || wsName || tab?.label || '';
     // Empty titles, titles hidden with the × button, and stale ones (unchanged
     // for 3 days) are not shown — a "prep for the morning shift" title four
     // days later only misleads.
@@ -368,8 +426,9 @@ async function collect() {
       id: p.pane_id,
       tabId: p.tab_id,
       number: ws?.number ?? null,
-      wsLabel: ws?.label ?? '',
+      wsLabel: wsName,
       repo: repoByWs.get(p.workspace_id) ?? null,
+      tree: linkedWs.has(p.workspace_id),
       label,
       status,
       focused: p.focused,
@@ -553,7 +612,8 @@ const server = http.createServer(async (req, res) => {
       let body = '';
       for await (const chunk of req) body += chunk;
       const { tab } = JSON.parse(body);
-      if (!/^w[0-9A-Za-z]*:t\d+$/.test(String(tab))) return send(res, 400, '{"error":"bad tab id"}');
+      // Tab/pane ordinals go base36 past 9 (wF:tE), not decimal-only.
+      if (!/^w[0-9A-Za-z]*:t[0-9A-Za-z]+$/.test(String(tab))) return send(res, 400, '{"error":"bad tab id"}');
       await herdr(['tab', 'focus', String(tab)]);
       return send(res, 200, '{"ok":true}');
     }
@@ -561,7 +621,7 @@ const server = http.createServer(async (req, res) => {
       let body = '';
       for await (const chunk of req) body += chunk;
       const j = JSON.parse(body);
-      if (!/^w[0-9A-Za-z]*:p\d+$/.test(String(j.pane)) || !/^w[0-9A-Za-z]*:t\d+$/.test(String(j.tab)) || !/^w[0-9A-Za-z]+$/.test(String(j.ws))) {
+      if (!/^w[0-9A-Za-z]*:p[0-9A-Za-z]+$/.test(String(j.pane)) || !/^w[0-9A-Za-z]*:t[0-9A-Za-z]+$/.test(String(j.tab)) || !/^w[0-9A-Za-z]+$/.test(String(j.ws))) {
         return send(res, 400, '{"error":"bad pane/tab/window ids"}');
       }
       if (retireJobs.has(j.tab)) return send(res, 409, '{"error":"already closing"}');

@@ -447,7 +447,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .repo-label {
+  .affil {
     display: block;
     margin-top: 3px;
     overflow: hidden;
@@ -458,7 +458,13 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .repo-label::before { content: "BASE / "; color: #425467; }
+  /* Distinct shapes of belonging: a tab names its main window, a linked
+     worktree names its parent repo (TREE), a plain checkout its repo (REPO).
+     Plain-text prefixes — glyphs outside the monospace stack render as
+     mis-sized emoji. */
+  .affil-window::before { content: "WINDOW / "; color: #425467; }
+  .affil-tree::before { content: "TREE / "; color: #3d5a50; }
+  .affil-repo::before { content: "REPO / "; color: #425467; }
 
   .control-rack {
     display: flex;
@@ -666,7 +672,7 @@
 
   .telemetry {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, .9fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 5px;
     min-width: 0;
     margin-top: 6px;
@@ -768,6 +774,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Worktree affiliation reads differently from window affiliation on full
+     and compact cards alike (declared after .compact-repo so it wins there). */
+  .affil-tree { color: #6f9d8a; font-style: italic; }
   /* Signals and hover controls share one right-hand bay. Only one of them is
      shown at a time, so arriving with the pointer costs a few pixels of
      reflow — never a name covered mid-letter by a floating panel. */
@@ -782,6 +791,7 @@
      priority chip forms a column you can run your eye down; the rare signals
      (lavish, retire) grow to the left of them. */
   .signal.slot-empty { visibility: hidden; }
+  .signal.noagent { color: var(--unknown); }
   .signal {
     min-width: 18px;
     height: 17px;
@@ -1121,9 +1131,6 @@
     .card-head { grid-template-columns: minmax(0, 1fr); }
     .control-rack { justify-content: flex-start; padding-left: 36px; }
     .alarm-annunciator small { display: none; }
-    .telemetry { grid-template-columns: minmax(0, 1fr) auto; }
-    .datum.window { display: none; }
-    .compact-repo { display: none; }
   }
 
   @container (max-width: 260px) {
@@ -1154,7 +1161,6 @@
     .operator-note { grid-template-columns: 39px minmax(0, 1fr); }
     .note-copy { font-size: 9px; }
     .task-copy { font-size: 9px; -webkit-line-clamp: 1; }
-    .telemetry { grid-template-columns: minmax(0, 1fr) auto; }
     .datum span { font-size: 7px; }
   }
 
@@ -1268,7 +1274,9 @@ const STATE = {
   done: { color: 'var(--done)', glyph: '✓', code: 'REVIEW' },
   working: { color: 'var(--working)', glyph: '▶', code: 'LIVE' },
   idle: { color: 'var(--idle)', glyph: 'Ⅱ', code: 'STANDBY' },
-  unknown: { color: 'var(--unknown)', glyph: '?', code: 'NO SIGNAL' }
+  // "unknown" = the window is there but no agent is attached (typical right
+  // after a herdr restart): an inactive card waiting to be brought back.
+  unknown: { color: 'var(--unknown)', glyph: '○', code: 'NO AGENT' }
 };
 // Mine columns are roles ("what do I do with this"), not herdr states.
 // The herdr state stays on every card as its lamp.
@@ -1318,8 +1326,12 @@ function esc(value) {
   return String(value ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
 }
 
+// The view comes from the FOLDER, never from the agent status: after a herdr
+// restart every window is agentless ("unknown") for a while, and exiling the
+// whole fleet to Other left Mine empty — the opposite of what a restart needs
+// (operator's rule, 2026-08-20). Other holds only explicitly marked windows.
 function viewOf(card) {
-  return card.view ?? (card.status === 'unknown' ? 'other' : 'mine');
+  return card.view ?? 'mine';
 }
 
 function age(sinceIso) {
@@ -1381,27 +1393,27 @@ function sameName(a, b) {
   return x === y || (Math.min(x.length, y.length) >= 4 && (x.includes(y) || y.includes(x)));
 }
 
-// The small line under an unrecognized window: the parent repo if it adds
-// something, else the window label, else the herdr tab id — never the name
-// that is already printed in bold above it.
-function subText(card) {
-  const repo = repoText(card);
-  if (repo) return repo;
-  if (card.wsLabel && !sameName(card.wsLabel, card.label)) return card.wsLabel;
-  return card.tabId || '';
+// Where does this card belong? ALWAYS answered on the card (operator's rule,
+// 2026-08-20: a bare tab name like "board-v2" says nothing) — in two distinct
+// shapes: a tab names its main window (WINDOW /), a worktree names its parent
+// repo (TREE /). The only thing never printed is the card's own name again.
+function affiliation(card) {
+  const out = [];
+  const win = card.wsLabel && !sameName(card.wsLabel, card.label) ? card.wsLabel : '';
+  if (win) out.push({ kind: 'window', text: win });
+  if (card.repo && !sameName(card.repo, card.label) && !(win && sameName(card.repo, win))) {
+    // "tree" = a linked worktree of the repo; a plain checkout in the repo
+    // itself gets the neutral REPO / mark instead.
+    out.push({ kind: card.tree ? 'tree' : 'repo', text: card.repo });
+  }
+  return out;
 }
 
-// "lane-1 / my-project": a branch window shows its parent project
-// unless the name already sounds in the card or window label.
-function repoText(card) {
-  if (!card.repo) return '';
-  const normalize = value => String(value ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-  const repo = normalize(card.repo);
-  const covers = value => {
-    const name = normalize(value);
-    return name && (name.includes(repo) || (name.length >= 4 && repo.includes(name)));
-  };
-  return !repo || covers(card.label) || covers(card.wsLabel) ? '' : card.repo;
+// The small line under a card in the Other list: the affiliation if there is
+// one, else the herdr tab id.
+function subText(card) {
+  const aff = affiliation(card);
+  return aff.length ? aff.map(a => a.text).join(' · ') : (card.tabId || '');
 }
 
 function stateStyle(status) {
@@ -1464,8 +1476,7 @@ function fullCard(card, columnKey) {
   const alarm = !deepFocus && isAlarm(card);
   const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
   const retire = data.retire?.[card.tabId];
-  const repo = repoText(card);
-  const windowNote = card.wsLabel && card.wsLabel !== card.label ? card.wsLabel : '';
+  const aff = affiliation(card);
   const pulseMinutes = card.lastWorkingAt ? Math.round((NOW - new Date(card.lastWorkingAt).getTime()) / 60000) : null;
   const remoteLine = card.remote
     ? `<div class="system-strip"><b>REMOTE</b><span>agent active on second machine</span></div>`
@@ -1493,7 +1504,7 @@ function fullCard(card, columnKey) {
           <span class="tail-number">#${card.number ?? '·'}</span>
           <span class="label-stack">
             <span class="session-label" title="${esc(card.cwd || card.label)}">${esc(card.label)}</span>
-            ${repo ? `<span class="repo-label" title="${esc(repo)}">${esc(repo)}</span>` : ''}
+            ${aff.map(a => `<span class="affil affil-${a.kind}" title="${esc(a.text)}">${esc(a.text)}</span>`).join('')}
           </span>
         </div>
         ${controlRack(card, expanded.has(card.id))}
@@ -1507,7 +1518,6 @@ function fullCard(card, columnKey) {
       ${lavishLines}
       <div class="telemetry">
         <span class="datum vector"><b>Direction</b><span title="${esc(card.dir || 'unassigned')}">${esc(card.dir || 'unassigned')}</span></span>
-        <span class="datum window"><b>Window</b><span title="${esc(windowNote || '—')}">${esc(windowNote || '—')}</span></span>
         <span class="datum age"><b>Stuck</b><span class="${ageClass}">${esc(displayedAge || '—')}</span></span>
       </div>
     </div>
@@ -1517,7 +1527,7 @@ function fullCard(card, columnKey) {
 function compactCard(card, options = {}) {
   const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
   const retire = data.retire?.[card.tabId];
-  const repo = repoText(card);
+  const affs = affiliation(card);
   const canExpand = options.expand !== false;
   // Rare signals first, then three fixed slots: an unset flag, star or priority
   // still holds its place, so the priority chips line up down the column.
@@ -1528,6 +1538,7 @@ function compactCard(card, options = {}) {
     ? `<span class="signal lavish" data-lavish-url="${esc(card.lavish[0].url)}" title="Lavish review: ${esc(card.lavish.map(a => a.name).join(', '))}">◈</span>`
     : '';
   const signals = [
+    card.status === 'unknown' ? `<span class="signal noagent" title="No agent in this window — bring the session back">○</span>` : '',
     retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : '',
     card.checkDate ? `<span class="signal date" title="Check back on ${esc(card.checkDate)}">${esc(shortDate(card.checkDate))}</span>` : '',
     card.kind ? `<span class="signal kind" title="Kind: ${esc(card.kind)}">${KIND_LABEL[card.kind]}</span>` : '',
@@ -1541,12 +1552,12 @@ function compactCard(card, options = {}) {
   const actions = (card.cwd
     ? (mine ? focusPickControl(card) : '') + starControl(card) + (mine ? roleControl(card) : '') + prioControl(card) + (mine ? dateControl(card) : '')
     : '') + powerControl(card) + focusControl();
-  return `<article class="flight-card compact ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.title || card.note || card.label)}&#10;Click to jump; arrow expands">
+  return `<article class="flight-card compact ${card.status === 'unknown' ? 'unknown-card' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.title || card.note || card.label)}&#10;Click to jump; arrow expands">
     ${focused ? `<div class="focus-banner"><span>You are here</span><span>focused herdr tab</span></div>` : ''}
     <div class="compact-grid">
       ${canExpand ? `<button type="button" class="expand-mini" data-expand="${esc(card.id)}" title="Expand idle card">▸</button>` : `<span class="state-lamp ${esc(card.status)}"></span>`}
       <span class="compact-number">#${card.number ?? '·'}</span>
-      <span class="compact-main"><span class="compact-label">${esc(card.label)}</span><span class="compact-repo">${esc(repo)}</span></span>
+      <span class="compact-main"><span class="compact-label">${esc(card.label)}</span><span class="compact-repo">${affs.map(a => `<span class="affil-${a.kind}">${esc(a.text)}</span>`).join(' ')}</span></span>
       <span class="compact-right">${lavishChip}<span class="compact-signals">${signals}</span><span class="compact-actions">${actions}</span></span>
       <span class="compact-age">${esc(age(card.since) || '')}</span>
     </div>
@@ -1694,8 +1705,8 @@ function renderOther(cards) {
     }).join('');
   board.innerHTML = `<section class="list-shell">
     <header class="list-masthead">
-      <span><h2>Unrecognized windows</h2><p>Herdr cannot classify these sessions. The ⏻ control saves memory and closes the window.</p></span>
-      <span class="mast-metric">${cards.length} NO-SIGNAL RECORDS</span>
+      <span><h2>Other windows</h2><p>Marked as outside your flow. The ⏻ control saves memory and closes the window.</p></span>
+      <span class="mast-metric">${cards.length} SET-ASIDE RECORDS</span>
     </header>
     <div class="manifest">${rows}</div>
   </section>`;

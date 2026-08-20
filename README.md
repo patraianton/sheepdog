@@ -29,7 +29,15 @@ session straight from herdr and lays it out as a kanban:
   currently focused in herdr is highlighted on the board ("you are here").
 - **Three tabs:** *Mine* (your own work, kanban), *Team* (one row per person,
   with "waiting on you" counters fed from `state/team.json`), *Other*
-  (windows herdr doesn't understand, as a plain list).
+  (windows you explicitly set aside, as a plain list).
+- **A restart empties nothing.** After a herdr restart the windows come back
+  before their agents do; those windows stay on the board as inactive cards
+  (dimmed, marked ○ "no agent") until you bring the sessions back. Every
+  card also names what it belongs to: a tab shows its main window
+  (`WINDOW /`), a linked worktree its parent repo (`TREE /`), a plain
+  checkout its repo (`REPO /`). An auto-named worktree window is titled by
+  the branch checked out in it — the branch is the work; renaming the window
+  by hand overrides that.
 - **The only manual input** is what herdr cannot know: priority (P1/P2/P3),
   a life-direction tag for color-coding, a "must not stop" star (the card
   turns red if a starred session goes quiet), a kind — temporary (⏱),
