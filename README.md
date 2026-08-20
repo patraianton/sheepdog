@@ -27,6 +27,12 @@ session straight from herdr and lays it out as a kanban:
 - **Check-back dates.** A card can carry "check on DD.MM" (presets +3 d /
   +1 week / +2 weeks). Until the date it waits as a thin Parked row; on the
   day it surfaces in Decisions by itself.
+- **Recap line on live cards.** A small local model (any OpenAI-compatible
+  server; set `SHEEPDOG_RECAP_URL` / `SHEEPDOG_RECAP_MODEL`, default LM
+  Studio at `127.0.0.1:1234`) summarizes each live session's journal tail
+  into one line, in a serial background queue so the board's poll never
+  waits for the GPU. Until a summary exists — or if the model server is
+  down — the card shows the session's last words instead.
 - **Refreshes every 3 seconds.** The "stuck for N h" timer shows how long a
   card has been sitting in its current state.
 - **Click a card to jump there.** The board focuses that herdr tab; the tab

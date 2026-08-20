@@ -100,11 +100,7 @@ async function lastAssistantText(file) {
   if (cached && cached.mtime === s.mtimeMs) return cached.text;
   let text = null;
   try {
-    const len = Math.min(262_144, s.size);
-    const fh = await open(file, 'r');
-    const buf = Buffer.alloc(len);
-    try { await fh.read(buf, 0, len, s.size - len); } finally { await fh.close(); }
-    const lines = buf.toString('utf8').split('\n');
+    const lines = await readJournalTail(file, s.size);
     for (let i = lines.length - 1; i >= 0 && !text; i--) {
       if (!lines[i].includes('"assistant"')) continue;
       try {
@@ -117,6 +113,87 @@ async function lastAssistantText(file) {
   } catch { /* unreadable journal = no recap */ }
   recapCache.set(file, { mtime: s.mtimeMs, text });
   return text;
+}
+
+// --- Local-model recap (operator's call, 2026-08-20): a small local model
+// (LM Studio, OpenAI-compatible API) writes the one-line recap of what each
+// live session is doing, from the journal tail. A serial background queue
+// with a per-file cooldown — the 3-second /data poll never waits for the
+// GPU; until a summary exists the card falls back to the last-words line,
+// and if the local server is down nothing breaks.
+const RECAP_API = process.env.SHEEPDOG_RECAP_URL || 'http://127.0.0.1:1234/v1/chat/completions';
+const RECAP_MODEL = process.env.SHEEPDOG_RECAP_MODEL || 'qwen3-4b-instruct-2507';
+const RECAP_COOLDOWN_MS = 120_000;
+const aiRecapCache = new Map(); // file -> { mtime, at, text }
+const recapQueue = [];
+const queuedRecapFiles = new Set();
+let recapPumpBusy = false;
+
+async function readJournalTail(file, size) {
+  const len = Math.min(262_144, size);
+  const fh = await open(file, 'r');
+  const buf = Buffer.alloc(len);
+  try { await fh.read(buf, 0, len, size - len); } finally { await fh.close(); }
+  return buf.toString('utf8').split('\n');
+}
+
+async function makeAiRecap(file) {
+  const s = await stat(file).catch(() => null);
+  if (!s) return;
+  const cached = aiRecapCache.get(file);
+  if (cached && (cached.mtime === s.mtimeMs || Date.now() - cached.at < RECAP_COOLDOWN_MS)) return;
+  const msgs = [];
+  for (const line of await readJournalTail(file, s.size)) {
+    try {
+      const o = JSON.parse(line);
+      if (o.isSidechain) continue;
+      if (o.type === 'assistant') {
+        const t = (o.message?.content ?? []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
+        if (t.length > 20) msgs.push('AGENT: ' + t);
+      } else if (o.type === 'user' && typeof o.message?.content === 'string') {
+        const t = o.message.content.trim();
+        if (t && !t.startsWith('<')) msgs.push('USER: ' + t); // markup lines are harness noise
+      }
+    } catch { /* partial or foreign line */ }
+  }
+  const ctx = msgs.slice(-12).join('\n---\n').slice(-6000);
+  if (!ctx) return;
+  const res = await fetch(RECAP_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: RECAP_MODEL,
+      messages: [{
+        role: 'user',
+        content: 'Below is the tail of a working agent session journal. Answer with ONE line '
+          + '(max 120 characters) in the same language the session speaks: what the session is '
+          + 'doing right now and what it waits on. No preamble, no quotes.\n\n' + ctx,
+      }],
+      temperature: 0.2,
+      max_tokens: 60,
+    }),
+    signal: AbortSignal.timeout(90_000),
+  });
+  if (!res.ok) throw new Error(`recap api ${res.status}`);
+  const j = await res.json();
+  const text = String(j.choices?.[0]?.message?.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  if (text) aiRecapCache.set(file, { mtime: s.mtimeMs, at: Date.now(), text });
+}
+
+function scheduleAiRecap(file) {
+  if (queuedRecapFiles.has(file)) return;
+  queuedRecapFiles.add(file);
+  recapQueue.push(file);
+  if (recapPumpBusy) return;
+  recapPumpBusy = true;
+  (async () => {
+    while (recapQueue.length) {
+      const next = recapQueue.shift();
+      queuedRecapFiles.delete(next);
+      try { await makeAiRecap(next); } catch { /* model down -> last-words fallback stands */ }
+    }
+    recapPumpBusy = false;
+  })();
 }
 
 // A linked worktree's checked-out branch: .git file -> gitdir -> HEAD, no git
@@ -372,12 +449,16 @@ async function collect() {
     readJsonSoft(REMOTE_FILE, {}),
   ]);
   // Recap lines: only panes with an attached agent have a session journal.
+  // The local-model summary wins when it exists; the session's last words
+  // fill in until the background queue catches up (or the model is down).
   const recapByPane = new Map();
   await Promise.all((agentListRes?.result?.agents ?? []).map(async (a) => {
     const sid = a.agent_session?.value;
     if (!sid || !a.cwd || !a.pane_id) return;
     const file = await findSessionFile(sid, a.cwd);
-    const text = file && await lastAssistantText(file);
+    if (!file) return;
+    scheduleAiRecap(file);
+    const text = aiRecapCache.get(file)?.text ?? await lastAssistantText(file);
     if (text) recapByPane.set(a.pane_id, text);
   }));
   const repoByWs = new Map();
