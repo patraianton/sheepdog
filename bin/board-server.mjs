@@ -6,7 +6,7 @@
 
 import http from 'node:http';
 import { execFile } from 'node:child_process';
-import { readFile, writeFile, rename, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, rename, mkdir, stat, open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -60,6 +60,63 @@ function normPath(p) {
   s = s.replaceAll('/', '\\').toLowerCase();
   while (s.endsWith('\\')) s = s.slice(0, -1);
   return s;
+}
+
+// --- Session recap: the session's last words, straight from its journal.
+// Claude Code's native /recap is interactive-only (no CLI, and 1960 recent
+// journals carry no recap record on disk — checked 2026-08-20), so the board
+// shows the closest true thing: the last text the agent said. The journal
+// format is internal to Claude Code; any parse failure just means no line.
+const HOME = process.env.USERPROFILE ?? '';
+const RECAP_ROOTS_GLOB = path.join(HOME, '.claude-accounts');
+const sessionPathCache = new Map(); // sid -> { file: string|null, at: ms }
+const recapCache = new Map(); // file -> { mtime, text }
+
+async function findSessionFile(sid, cwd) {
+  const hit = sessionPathCache.get(sid);
+  if (hit && (hit.file || Date.now() - hit.at < 300_000)) return hit.file;
+  // Journals live under <root>/projects/<escaped cwd>/<session id>.jsonl,
+  // where the escape turns ':', '\' and '.' into '-'.
+  const escaped = String(cwd).replace(/[:\\/.]/g, '-');
+  const roots = [path.join(HOME, '.claude')];
+  try {
+    const { readdir } = await import('node:fs/promises');
+    for (const acc of await readdir(RECAP_ROOTS_GLOB)) roots.push(path.join(RECAP_ROOTS_GLOB, acc));
+  } catch {}
+  let file = null;
+  for (const root of roots) {
+    const candidate = path.join(root, 'projects', escaped, sid + '.jsonl');
+    if (await stat(candidate).then(() => true, () => false)) { file = candidate; break; }
+  }
+  sessionPathCache.set(sid, { file, at: Date.now() });
+  return file;
+}
+
+// Last assistant text in the journal tail. Re-parsed only when the file grew.
+async function lastAssistantText(file) {
+  const s = await stat(file).catch(() => null);
+  if (!s) return null;
+  const cached = recapCache.get(file);
+  if (cached && cached.mtime === s.mtimeMs) return cached.text;
+  let text = null;
+  try {
+    const len = Math.min(262_144, s.size);
+    const fh = await open(file, 'r');
+    const buf = Buffer.alloc(len);
+    try { await fh.read(buf, 0, len, s.size - len); } finally { await fh.close(); }
+    const lines = buf.toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0 && !text; i--) {
+      if (!lines[i].includes('"assistant"')) continue;
+      try {
+        const o = JSON.parse(lines[i]);
+        if (o.type !== 'assistant' || o.isSidechain) continue;
+        const t = (o.message?.content ?? []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
+        if (t && t.length >= 8) text = t.replace(/\s+/g, ' ').slice(0, 220);
+      } catch { /* partial or foreign line */ }
+    }
+  } catch { /* unreadable journal = no recap */ }
+  recapCache.set(file, { mtime: s.mtimeMs, text });
+  return text;
 }
 
 // A linked worktree's checked-out branch: .git file -> gitdir -> HEAD, no git
@@ -306,13 +363,23 @@ async function refreshLavish() {
 async function collect() {
   if (remoteState.checkedAt === 0) await refreshRemote(); else refreshRemote();
   if (lavishState.checkedAt === 0) await refreshLavish(); else refreshLavish();
-  const [snapRes, wsListRes, projects, seen, remoteMapRaw] = await Promise.all([
+  const [snapRes, wsListRes, agentListRes, projects, seen, remoteMapRaw] = await Promise.all([
     herdr(['api', 'snapshot']),
     herdr(['workspace', 'list']).catch(() => null), // the snapshot lacks the repo binding
+    herdr(['agent', 'list']).catch(() => null), // pane -> session id, for recaps
     loadProjects(),
     loadSeen(),
     readJsonSoft(REMOTE_FILE, {}),
   ]);
+  // Recap lines: only panes with an attached agent have a session journal.
+  const recapByPane = new Map();
+  await Promise.all((agentListRes?.result?.agents ?? []).map(async (a) => {
+    const sid = a.agent_session?.value;
+    if (!sid || !a.cwd || !a.pane_id) return;
+    const file = await findSessionFile(sid, a.cwd);
+    const text = file && await lastAssistantText(file);
+    if (text) recapByPane.set(a.pane_id, text);
+  }));
   const repoByWs = new Map();
   // Linked worktrees only: a plain checkout also carries worktree.repo_name,
   // and the page must not paint it with the TREE / worktree mark.
@@ -454,6 +521,7 @@ async function collect() {
         .map(a => ({ name: a.name, url: a.url, pending: a.pending })),
       lastWorkingAt: p.agent_status === 'working' ? now : (seen[`${cwd}|~pulse`]?.last ?? null),
       title,
+      recap: recapByPane.get(p.pane_id) ?? null,
       agent: p.agent ?? null,
       since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,
     };

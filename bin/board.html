@@ -514,6 +514,27 @@
     animation: live-pulse 1.2s ease-in-out infinite;
   }
 
+  /* The session's last words from its journal (the stand-in for /recap). */
+  .recap-line {
+    display: flex;
+    gap: 6px;
+    min-width: 0;
+    margin-top: 5px;
+    padding: 4px 7px;
+    border: 1px solid #223140;
+    background: #101b26;
+    color: var(--ink-mid);
+    font-size: 9.5px;
+    line-height: 1.4;
+  }
+  .recap-line b { color: #4d6478; font-weight: 900; }
+  .recap-line span {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
   .alarm-annunciator {
     position: relative;
     display: grid;
@@ -1526,6 +1547,11 @@ function fullCard(card, columnKey) {
   const titleLine = card.title
     ? `<div class="task-readout"><span class="state-lamp ${esc(card.status)}"></span><span class="task-copy" title="${esc(card.title)}">${esc(card.title)}</span>${card.cwd ? `<button type="button" class="hide-control" data-cwd="${esc(card.cwd)}" data-title="${esc(card.title)}" title="Hide this title (until the task changes)">×</button>` : ''}</div>`
     : '';
+  // The session's own last words from its journal — the closest true thing
+  // to Claude's interactive /recap, at zero tokens.
+  const recapLine = card.recap && card.recap !== card.title
+    ? `<div class="recap-line" title="${esc(card.recap)}"><b>»</b><span>${esc(card.recap)}</span></div>`
+    : '';
 
   return `<article class="flight-card ${card.status === 'unknown' ? 'unknown-card' : ''} ${alarm ? 'alarm-card' : ''} ${liveStar ? 'star-live' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" title="Click to jump to this herdr tab" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}">
     ${focused ? `<div class="focus-banner"><span>You are here</span><span>focused herdr tab</span></div>` : ''}
@@ -1544,6 +1570,7 @@ function fullCard(card, columnKey) {
       ${liveStar ? `<div class="alarm-annunciator live" title="Starred and running"><span class="alarm-icon">★</span><span class="alarm-copy">Star project · running</span><small>LIVE</small></div>` : ''}
       ${card.note ? `<div class="operator-note"><span class="note-callout">Stop<br>crane</span><span class="note-copy" title="${esc(card.note)}">${esc(card.note)}</span></div>` : ''}
       ${titleLine}
+      ${recapLine}
       ${remoteLine}
       ${retireLine}
       ${dueLine}
