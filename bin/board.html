@@ -1419,11 +1419,14 @@ function roleColumnOf(card) {
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
   // Running holds ONLY what actually runs: live sessions and cron work (idle
-  // between wakeups is normal). Everything else sits in the column where it
-  // REALLY is — Standby. A star does not move a stalled card into Decisions
-  // ("wrong logical order" — operator, 2026-08-20): it lifts the card to the
-  // top of Standby and keeps its red MUST RUN alarm visible there instead.
+  // between wakeups is normal). For what stands still, the star splits two
+  // cases (operator, 2026-08-20): a starred session whose agent is ALIVE but
+  // stopped is waiting for the operator's next word — that is a decision on
+  // him. A starred window with no agent at all ("not started") is not a
+  // decision — it parks in Standby, lifted to the top with its MUST RUN
+  // alarm. Unstarred stalled cards just park.
   if (isLive(card) || card.kind === 'cron') return 'running';
+  if (card.star && card.agent) return 'decisions';
   return 'parked';
 }
 
