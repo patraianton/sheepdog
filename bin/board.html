@@ -589,6 +589,24 @@
     text-align: center;
     text-transform: uppercase;
   }
+  .operator-note[data-note-edit] { cursor: text; }
+  .operator-note[data-note-edit]:hover { border-color: #a08540; }
+  .note-input {
+    min-width: 0;
+    align-self: center;
+    margin: 3px 6px 3px 0;
+    padding: 2px 5px;
+    background: #10161f;
+    border: 1px solid #60778c;
+    border-radius: 2px;
+    color: #ffe8a6;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 650;
+    line-height: 1.25;
+  }
+  .note-input:focus { outline: none; border-color: var(--note); }
+  .control.note-on { color: var(--note); border-color: #66582f; }
   .note-copy {
     min-width: 0;
     display: -webkit-box;
@@ -1334,6 +1352,9 @@ let lastFocusedTab = null;
 let pageVersion = null;
 let pendingOff = null;
 let pendingOffTimer = null;
+// cwd whose note is being typed right now; repaints hold off so the input
+// (and the text in it) survives the 3-second refresh cycle.
+let noteEditing = null;
 const expanded = new Set();
 
 function esc(value) {
@@ -1361,12 +1382,19 @@ function hasPulse(card) {
   return Boolean(card.star && card.lastWorkingAt && (NOW - new Date(card.lastWorkingAt).getTime()) < PULSE_MS);
 }
 
+// "Running" means running RIGHT NOW: herdr says working, or the Mac twin
+// runs. A recent pulse is NOT running — a card idle for 7 minutes wearing a
+// green RUNNING banner was the operator's second status bug of 2026-08-20.
+// The pulse only delays the red alarm on a star (see isAlarm).
+function isLive(card) {
+  return card.status === 'working' || Boolean(card.remote);
+}
+
 // Column order (operator's rules, 2026-08-20): everything RUNNING right now
 // floats to the top — the live starred card above all, then other live
 // cards, then starred-but-stalled (alarming), then the rest.
 function activityRank(card) {
-  const live = card.status === 'working' || card.remote || hasPulse(card);
-  if (live) return card.star ? 0 : 1;
+  if (isLive(card)) return card.star ? 0 : 1;
   return card.star ? 2 : 3;
 }
 
@@ -1395,8 +1423,9 @@ function roleColumnOf(card) {
   // live agent (a "runs" role included) is a stopped process and waits in
   // Parked until brought back (operator, 2026-08-20).
   if (isAlarm(card)) return 'decisions';
-  const live = card.status === 'working' || card.remote || hasPulse(card);
-  if (live || card.kind === 'cron') return 'running';
+  if (isLive(card) || card.kind === 'cron') return 'running';
+  // An idle star inside the pulse grace is not alarming yet, but it is not
+  // running either — it waits with the other decisions until it moves again.
   return card.star ? 'decisions' : 'parked';
 }
 
@@ -1412,9 +1441,12 @@ function thinCard(card, columnKey) {
 function isAlarm(card) {
   // A star alarms when it is not actually moving: no live signal at all, or
   // the recap model judged it stuck on something outside itself (a sleeping
-  // Mac, an approval) even while the pulse still looks fresh.
-  return Boolean(card.star && (card.recapBlocked
-    || (card.status !== 'working' && !card.remote && !hasPulse(card))));
+  // Mac, an approval) even while the pulse still looks fresh. A session that
+  // is working RIGHT NOW (or whose Mac twin runs) outranks the model's
+  // reading of the transcript — "waiting for a report" while visibly busy is
+  // not stuck (false alarm on search-page, 2026-08-20).
+  return Boolean(card.star && card.status !== 'working' && !card.remote
+    && (card.recapBlocked || !hasPulse(card)));
 }
 
 // Two names say the same thing when one is contained in the other — the
@@ -1491,6 +1523,20 @@ function dateControl(card) {
   return `<button type="button" class="control date-control ${card.checkDate ? 'date-set' : 'unset'}" data-cwd="${esc(card.cwd)}" data-date="${esc(card.checkDate || '')}" title="Check-back date: +3 d → +1 week → +2 weeks → off. On arrival the card surfaces in Decisions">${card.checkDate ? esc(shortDate(card.checkDate)) : '⧖'}</button>`;
 }
 
+// The note is the operator's own line and nothing else: set and cleared right
+// here, never inherited, never written by automation (his rule, 2026-08-20).
+function noteControl(card) {
+  return `<button type="button" class="control note-control ${card.note ? 'note-on' : 'unset'}" data-cwd="${esc(card.cwd)}" data-id="${esc(card.id)}" title="${card.note ? 'Edit the note' : 'Add a note'}">⚑</button>`;
+}
+
+function noteStrip(card) {
+  if (noteEditing === card.cwd) {
+    return `<div class="operator-note editing"><span class="note-callout">Note</span><input class="note-input" data-cwd="${esc(card.cwd)}" maxlength="300" value="${esc(card.note || '')}" placeholder="Enter saves · empty clears · Esc cancels"></div>`;
+  }
+  if (!card.note) return '';
+  return `<div class="operator-note" data-note-edit="${esc(card.cwd)}" data-id="${esc(card.id)}" title="Click to edit or clear"><span class="note-callout">Note</span><span class="note-copy">${esc(card.note)}</span></div>`;
+}
+
 // The whole card is a jump-to-tab button, so the full rack spends no slot on ⊕.
 function controlRack(card, allowCollapse) {
   const power = powerControl(card);
@@ -1498,7 +1544,7 @@ function controlRack(card, allowCollapse) {
     ? `<button type="button" class="control expand-control" data-expand="${esc(card.id)}" title="Collapse to a thin row">▴</button>`
     : '';
   if (!card.cwd) return `<div class="control-rack">${collapse}${power}${focusControl()}</div>`;
-  return `<div class="control-rack">${collapse}${focusPickControl(card)}${starControl(card)}${kindControl(card)}${roleControl(card)}${prioControl(card)}${dateControl(card)}${power}</div>`;
+  return `<div class="control-rack">${collapse}${focusPickControl(card)}${starControl(card)}${kindControl(card)}${roleControl(card)}${prioControl(card)}${dateControl(card)}${noteControl(card)}${power}</div>`;
 }
 
 function fullCard(card, columnKey) {
@@ -1510,7 +1556,9 @@ function fullCard(card, columnKey) {
   const alarm = !deepFocus && isAlarm(card);
   // The healthy mirror of the alarm: a starred card that IS running gets the
   // same weight of highlight, in green — never mutually true with the alarm.
-  const liveStar = Boolean(card.star && !isAlarm(card) && (card.status === 'working' || card.remote || hasPulse(card)));
+  // Only a card running RIGHT NOW earns the green banner — a fresh pulse on
+  // an idle card does not (operator, 2026-08-20).
+  const liveStar = Boolean(card.star && !isAlarm(card) && isLive(card));
   const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
   const retire = data.retire?.[card.tabId];
   const aff = affiliation(card);
@@ -1552,7 +1600,7 @@ function fullCard(card, columnKey) {
       </div>
       ${alarm ? `<div class="alarm-annunciator" title="Must not stop, but stuck"><span class="alarm-icon">!</span><span class="alarm-copy">${card.recapBlocked ? 'Must run · waits on external' : 'Must run · signal idle'}</span><small>ATTN</small></div>` : ''}
       ${liveStar ? `<div class="alarm-annunciator live" title="Starred and running"><span class="alarm-icon">★</span><span class="alarm-copy">Star project · running</span><small>LIVE</small></div>` : ''}
-      ${card.note ? `<div class="operator-note"><span class="note-callout">Note</span><span class="note-copy" title="${esc(card.note)}">${esc(card.note)}</span></div>` : ''}
+      ${noteStrip(card)}
       ${taskLine}
       ${remoteLine}
       ${retireLine}
@@ -1592,7 +1640,7 @@ function compactCard(card, options = {}) {
   // row offering them would store state no view ever shows.
   const mine = viewOf(card) === 'mine';
   const actions = (card.cwd
-    ? (mine ? focusPickControl(card) : '') + starControl(card) + (mine ? roleControl(card) : '') + prioControl(card) + (mine ? dateControl(card) : '')
+    ? (mine ? focusPickControl(card) : '') + starControl(card) + (mine ? roleControl(card) : '') + prioControl(card) + (mine ? dateControl(card) : '') + (mine ? noteControl(card) : '')
     : '') + powerControl(card) + focusControl();
   return `<article class="flight-card compact ${card.status === 'unknown' ? 'unknown-card' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.recap || card.title || card.note || card.label)}&#10;Click to jump; arrow expands">
     ${focused ? `<div class="focus-banner"><span>You are here</span><span>focused herdr tab</span></div>` : ''}
@@ -1857,7 +1905,10 @@ async function refresh(force) {
     document.getElementById('error').style.display = 'none';
     const sig = JSON.stringify([fresh.cards, fresh.retire, fresh.team, fresh.lavish,
       fresh.remote, fresh.focusedTab, fresh.windows, fresh.columns]);
-    if (force || sig !== lastRenderSig || Date.now() - lastRenderAt > 60_000) {
+    if (noteEditing) {
+      // A repaint would wipe the note input mid-typing; the fresh data waits.
+      updateReadout();
+    } else if (force || sig !== lastRenderSig || Date.now() - lastRenderAt > 60_000) {
       lastRenderSig = sig;
       lastRenderAt = Date.now();
       render();
@@ -2016,6 +2067,19 @@ document.addEventListener('click', async (ev) => {
     setField(prio.dataset.cwd, { prio: next }, c => { c.prio = next; });
     return;
   }
+  // A click inside the note input is typing, not a jump to the tab under it.
+  if (ev.target.closest('.note-input')) return;
+  const noteBtn = ev.target.closest('.note-control, [data-note-edit]');
+  if (noteBtn) {
+    const cwd = noteBtn.dataset.cwd || noteBtn.dataset.noteEdit;
+    if (!cwd) return;
+    noteEditing = cwd;
+    if (noteBtn.dataset.id) expanded.add(noteBtn.dataset.id); // a thin row expands to show the editor
+    render();
+    const input = document.querySelector('.note-input');
+    if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+    return;
+  }
   const card = ev.target.closest('[data-tab]');
   if (card && card.dataset.tab) {
     try {
@@ -2045,6 +2109,27 @@ if (thenView && VIEWS.includes(thenView)) {
 }
 
 refresh(true);
+// Enter saves the note (empty line clears it), Esc cancels; clicking away
+// cancels too — a note changes only when the operator confirms it.
+document.addEventListener('keydown', (ev) => {
+  const input = ev.target && ev.target.classList?.contains('note-input') ? ev.target : null;
+  if (!input) return;
+  if (ev.key === 'Enter') {
+    const v = input.value.trim().slice(0, 300);
+    noteEditing = null;
+    setField(input.dataset.cwd, { note: v || null }, c => { c.note = v || null; });
+  } else if (ev.key === 'Escape') {
+    noteEditing = null;
+    render();
+  }
+});
+document.addEventListener('focusout', (ev) => {
+  if (ev.target && ev.target.classList?.contains('note-input')) {
+    // Give a same-instant Enter keydown a beat to win before the cancel.
+    setTimeout(() => { if (noteEditing) { noteEditing = null; render(); } }, 150);
+  }
+});
+
 setInterval(() => refresh(false), 3000);
 </script>
 </body>

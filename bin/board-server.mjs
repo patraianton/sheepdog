@@ -602,7 +602,10 @@ async function collect() {
       focus: proj?.focus === true,
       checkDate: proj?.checkDate ?? null,
       view: proj?.view ?? null,
-      note: proj?.note ?? null,
+      // A note is strictly manual and strictly per-folder: set and cleared
+      // from the board UI, never inherited from a parent entry (operator's
+      // rule, 2026-08-20 — a root-folder note leaked onto unrelated cards).
+      note: projects.get(cwd)?.note ?? null,
       remote: onRemote(cwd),
       // A review page is a BLOCKER only while it is the session's last word.
       // lavish never closes sessions on its own, so an old page would block
@@ -682,6 +685,9 @@ function setFields(cwd, patch) {
     }
     // Never overwrite a parent entry — create a precise one for this folder.
     const base = target && normPath(target) !== key ? { ...raw[target] } : (raw[target] ?? {});
+    // A parent's note never travels into a child entry: notes are per-folder,
+    // and baking one in here is how a stale root note haunted new projects.
+    if (target && normPath(target) !== key) delete base.note;
     const entryKey = target && normPath(target) === key ? target : key;
     const entry = { ...base };
     for (const [f, v] of Object.entries(patch)) {
