@@ -1392,10 +1392,12 @@ function isLive(card) {
 
 // Column order (operator's rules, 2026-08-20): everything RUNNING right now
 // floats to the top — the live starred card above all, then other live
-// cards, then starred-but-stalled (alarming), then the rest.
+// cards; among the stalled, alarming stars first, quiet stars next, the
+// rest last. This is how a starred card tops Standby without leaving it.
 function activityRank(card) {
   if (isLive(card)) return card.star ? 0 : 1;
-  return card.star ? 2 : 3;
+  if (card.star) return isAlarm(card) ? 2 : 3;
+  return 4;
 }
 
 function localDate(ms) {
@@ -1417,16 +1419,12 @@ function roleColumnOf(card) {
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
   // Running holds ONLY what actually runs: live sessions and cron work (idle
-  // between wakeups is normal). A stuck star — no live signal, or the recap
-  // model judged it waiting on something external — is an action on the
-  // operator, so its red alarm sits in Decisions. Everything else without a
-  // live agent (a "runs" role included) is a stopped process and waits in
-  // Parked until brought back (operator, 2026-08-20).
-  if (isAlarm(card)) return 'decisions';
+  // between wakeups is normal). Everything else sits in the column where it
+  // REALLY is — Standby. A star does not move a stalled card into Decisions
+  // ("wrong logical order" — operator, 2026-08-20): it lifts the card to the
+  // top of Standby and keeps its red MUST RUN alarm visible there instead.
   if (isLive(card) || card.kind === 'cron') return 'running';
-  // An idle star inside the pulse grace is not alarming yet, but it is not
-  // running either — it waits with the other decisions until it moves again.
-  return card.star ? 'decisions' : 'parked';
+  return 'parked';
 }
 
 // Which columns show a card as a thin row: Tools, Parked and Running while
