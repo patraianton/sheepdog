@@ -391,7 +391,6 @@ async function collect() {
     const key = best || a.folder;
     if (!bucket.has(key) || (a.mtime ?? 0) > (bucket.get(key).mtime ?? 0)) bucket.set(key, a);
   }
-  for (const [k, a] of lavishByCwd) lavishByCwd.set(k, [{ name: a.name, url: a.url, pending: a.pending }]);
   const lavishUnattached = [...newestUnattached.values()];
 
   await queued(async () => {
@@ -443,7 +442,16 @@ async function collect() {
       view: proj?.view ?? null,
       note: proj?.note ?? null,
       remote: onRemote(cwd),
-      lavish: lavishByCwd.get(cwd) ?? [],
+      // A review page is a BLOCKER only while it is the session's last word.
+      // lavish never closes sessions on its own, so an old page would block
+      // the card forever: if the folder has worked 10+ minutes past the
+      // page's mtime, the ask is history, not a waiting decision (operator's
+      // rule, 2026-08-20 — a working session must not sit in Decisions over
+      // a week-old page).
+      lavish: [lavishByCwd.get(cwd)]
+        .filter(a => a && (!seen[`${cwd}|~pulse`]?.last
+          || Date.parse(seen[`${cwd}|~pulse`].last) - (a.mtime ?? 0) < 10 * 60 * 1000))
+        .map(a => ({ name: a.name, url: a.url, pending: a.pending })),
       lastWorkingAt: p.agent_status === 'working' ? now : (seen[`${cwd}|~pulse`]?.last ?? null),
       title,
       agent: p.agent ?? null,
@@ -460,7 +468,9 @@ async function collect() {
     remote: { ok: remoteState.ok, tasks: remoteState.hints },
     lavish: {
       ok: lavishState.ok,
-      total: lavishByCwd.size + lavishUnattached.length,
+      // Count what the board actually shows: blockers on cards plus loose
+      // pages — not every session lavish still remembers.
+      total: new Set(cards.filter(c => c.lavish.length).map(c => c.cwd)).size + lavishUnattached.length,
       unattached: lavishUnattached.map(a => ({ name: a.name, url: a.url, pending: a.pending, folder: a.folder })),
     },
     retire: Object.fromEntries(retireJobs),

@@ -12,7 +12,8 @@ session straight from herdr and lays it out as a kanban:
   entered by hand — herdr is the source of truth.
 - **Columns = what to do with it, not what the agent said.** *Decisions* (an
   open review page, a blocked session or an arrived check-back date — always
-  first), *Focus* (the cards you picked for deep work), *Running* (long
+  first; a review page counts only while it is the session's last word — once
+  the session works past it, the page is history, not a blocker), *Focus* (the cards you picked for deep work), *Running* (long
   processes; sprints bother you only at checkpoints, starred and cron ones
   live here too), *Tools* (maintenance, thin rows, never alarms), *Parked*
   (consciously paused, thin rows). The raw herdr state stays on every card
