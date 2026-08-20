@@ -1389,10 +1389,12 @@ function roleColumnOf(card) {
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
   // Running holds ONLY what actually runs: live sessions and cron work (idle
-  // between wakeups is normal). A stalled star is an action on the operator —
-  // bring it back or unstar — so its red alarm sits in Decisions. Everything
-  // else without a live agent (a "runs" role included) is a stopped process
-  // and waits in Parked until brought back (operator, 2026-08-20).
+  // between wakeups is normal). A stuck star — no live signal, or the recap
+  // model judged it waiting on something external — is an action on the
+  // operator, so its red alarm sits in Decisions. Everything else without a
+  // live agent (a "runs" role included) is a stopped process and waits in
+  // Parked until brought back (operator, 2026-08-20).
+  if (isAlarm(card)) return 'decisions';
   const live = card.status === 'working' || card.remote || hasPulse(card);
   if (live || card.kind === 'cron') return 'running';
   return card.star ? 'decisions' : 'parked';
@@ -1408,7 +1410,11 @@ function thinCard(card, columnKey) {
 }
 
 function isAlarm(card) {
-  return Boolean(card.star && card.status !== 'working' && !card.remote && !hasPulse(card));
+  // A star alarms when it is not actually moving: no live signal at all, or
+  // the recap model judged it stuck on something outside itself (a sleeping
+  // Mac, an approval) even while the pulse still looks fresh.
+  return Boolean(card.star && (card.recapBlocked
+    || (card.status !== 'working' && !card.remote && !hasPulse(card))));
 }
 
 // Two names say the same thing when one is contained in the other — the
@@ -1504,7 +1510,7 @@ function fullCard(card, columnKey) {
   const alarm = !deepFocus && isAlarm(card);
   // The healthy mirror of the alarm: a starred card that IS running gets the
   // same weight of highlight, in green — never mutually true with the alarm.
-  const liveStar = Boolean(card.star && (card.status === 'working' || card.remote || hasPulse(card)));
+  const liveStar = Boolean(card.star && !isAlarm(card) && (card.status === 'working' || card.remote || hasPulse(card)));
   const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
   const retire = data.retire?.[card.tabId];
   const aff = affiliation(card);
@@ -1544,9 +1550,9 @@ function fullCard(card, columnKey) {
         </div>
         ${controlRack(card, expanded.has(card.id))}
       </div>
-      ${alarm ? `<div class="alarm-annunciator" title="Must not stop, but idle"><span class="alarm-icon">!</span><span class="alarm-copy">Must run · signal idle</span><small>ATTN</small></div>` : ''}
+      ${alarm ? `<div class="alarm-annunciator" title="Must not stop, but stuck"><span class="alarm-icon">!</span><span class="alarm-copy">${card.recapBlocked ? 'Must run · waits on external' : 'Must run · signal idle'}</span><small>ATTN</small></div>` : ''}
       ${liveStar ? `<div class="alarm-annunciator live" title="Starred and running"><span class="alarm-icon">★</span><span class="alarm-copy">Star project · running</span><small>LIVE</small></div>` : ''}
-      ${card.note ? `<div class="operator-note"><span class="note-callout">Stop<br>crane</span><span class="note-copy" title="${esc(card.note)}">${esc(card.note)}</span></div>` : ''}
+      ${card.note ? `<div class="operator-note"><span class="note-callout">Note</span><span class="note-copy" title="${esc(card.note)}">${esc(card.note)}</span></div>` : ''}
       ${taskLine}
       ${remoteLine}
       ${retireLine}
@@ -1771,6 +1777,12 @@ function renderHeader(allViewCards) {
   }
   document.querySelector('.command-deck').classList.toggle('no-filters', !filters.children.length);
 
+  updateReadout();
+}
+
+// The readout line updates on every poll even when the board itself is not
+// redrawn — the UPDATED clock must tick without repainting the columns.
+function updateReadout() {
   const timestamp = new Date(data.generatedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const remote = data.remote?.tasks?.length ? ` / <strong>REMOTE ${esc(data.remote.tasks.join(', '))}</strong>` : '';
   const lavishTotal = data.lavish?.total ? ` / <strong class="lavish-total">◈ LAVISH ${data.lavish.total}</strong>` : '';
@@ -1822,6 +1834,11 @@ function showError(msg) {
 // seq drops stale responses, inflight keeps polls from overlapping.
 let seq = 0;
 let inflight = false;
+// Repaint only when the picture actually changed: rebuilding identical HTML
+// every 3 seconds reads as flicker (operator, 2026-08-20). Age timers still
+// need an occasional pass, so an unchanged board redraws once a minute.
+let lastRenderSig = '';
+let lastRenderAt = 0;
 async function refresh(force) {
   if (inflight && !force) return;
   inflight = true;
@@ -1838,7 +1855,15 @@ async function refresh(force) {
     }
     data = fresh;
     document.getElementById('error').style.display = 'none';
-    render();
+    const sig = JSON.stringify([fresh.cards, fresh.retire, fresh.team, fresh.lavish,
+      fresh.remote, fresh.focusedTab, fresh.windows, fresh.columns]);
+    if (force || sig !== lastRenderSig || Date.now() - lastRenderAt > 60_000) {
+      lastRenderSig = sig;
+      lastRenderAt = Date.now();
+      render();
+    } else {
+      updateReadout(); // just the clock — no repaint, no flicker
+    }
   } catch (e) {
     if (my === seq) showError('herdr not responding: ' + e.message);
   } finally {

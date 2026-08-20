@@ -165,19 +165,32 @@ async function makeAiRecap(file) {
       model: RECAP_MODEL,
       messages: [{
         role: 'user',
-        content: 'Below is the tail of a working agent session journal. Answer with ONE line '
-          + '(max 120 characters) in the same language the session speaks: what the session is '
-          + 'doing right now and what it waits on. No preamble, no quotes.\n\n' + ctx,
+        content: 'Below is the tail of a working agent session journal. Reply with STRICT JSON '
+          + 'only, no code fences: {"recap": "<one line, max 120 chars, in the same language the '
+          + 'session speaks: what the session is doing right now>", "blocked": <true only if the '
+          + 'session is stuck mid-task waiting on something outside itself - an operator action, '
+          + 'another machine, an approval, a resource; false if it is actively working or has '
+          + 'finished its task>}\n\n' + ctx,
       }],
       temperature: 0.2,
-      max_tokens: 60,
+      max_tokens: 120,
     }),
     signal: AbortSignal.timeout(90_000),
   });
   if (!res.ok) throw new Error(`recap api ${res.status}`);
   const j = await res.json();
-  const text = String(j.choices?.[0]?.message?.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
-  if (text) aiRecapCache.set(file, { mtime: s.mtimeMs, at: Date.now(), text });
+  const raw = String(j.choices?.[0]?.message?.content ?? '').replace(/^```(json)?|```$/gm, '').trim();
+  let text = '';
+  let blocked = false;
+  try {
+    const parsed = JSON.parse(raw);
+    text = String(parsed.recap ?? '');
+    blocked = parsed.blocked === true;
+  } catch {
+    text = raw; // the model ignored the shape - its words still beat nothing
+  }
+  text = text.replace(/\s+/g, ' ').trim().slice(0, 220);
+  if (text) aiRecapCache.set(file, { mtime: s.mtimeMs, at: Date.now(), text, blocked });
 }
 
 function scheduleAiRecap(file) {
@@ -458,8 +471,9 @@ async function collect() {
     const file = await findSessionFile(sid, a.cwd);
     if (!file) return;
     scheduleAiRecap(file);
-    const text = aiRecapCache.get(file)?.text ?? await lastAssistantText(file);
-    if (text) recapByPane.set(a.pane_id, text);
+    const ai = aiRecapCache.get(file);
+    const text = ai?.text ?? await lastAssistantText(file);
+    if (text) recapByPane.set(a.pane_id, { text, blocked: ai?.blocked === true });
   }));
   const repoByWs = new Map();
   // Linked worktrees only: a plain checkout also carries worktree.repo_name,
@@ -602,7 +616,9 @@ async function collect() {
         .map(a => ({ name: a.name, url: a.url, pending: a.pending })),
       lastWorkingAt: p.agent_status === 'working' ? now : (seen[`${cwd}|~pulse`]?.last ?? null),
       title,
-      recap: recapByPane.get(p.pane_id) ?? null,
+      recap: recapByPane.get(p.pane_id)?.text ?? null,
+      // The model's verdict: stuck mid-task on something outside itself.
+      recapBlocked: recapByPane.get(p.pane_id)?.blocked ?? false,
       agent: p.agent ?? null,
       since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,
     };
