@@ -1447,7 +1447,7 @@ function thinCard(card, columnKey) {
 // model's verdict) is work in flight, not a parked project and not an alarm
 // (operator, 2026-08-21): the external system is doing the running.
 function waitsExternal(card) {
-  return Boolean(card.agent && card.recapBlocked && !isLive(card));
+  return Boolean(card.agent && card.recapWaits === 'system' && !isLive(card));
 }
 
 function isAlarm(card) {

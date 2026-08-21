@@ -7,8 +7,6 @@
 import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { readFile, writeFile, rename, mkdir, stat, open } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -123,24 +121,88 @@ async function lastAssistantText(file) {
 // with a per-file cooldown — the 3-second /data poll never waits for the
 // GPU; until a summary exists the card falls back to the last-words line,
 // and if the local server is down nothing breaks.
-// Default target (operator's call, 2026-08-21): the always-on llama-server
-// (qwen3.8-27b on :8099) instead of LM Studio, so no second model gets
-// auto-loaded into the GPU. That server wants a bearer key (read from its key
-// file unless SHEEPDOG_RECAP_KEY is set) and thinks before answering unless
-// told not to - with a 120-token budget the thinking would eat the whole
-// reply, so thinking is switched off per request (LM Studio ignores the flag).
-const RECAP_API = process.env.SHEEPDOG_RECAP_URL || 'http://127.0.0.1:8099/v1/chat/completions';
-const RECAP_MODEL = process.env.SHEEPDOG_RECAP_MODEL || 'qwen3.8-27b';
-function defaultRecapKey() {
-  try { return readFileSync(path.join(homedir(), '.local', 'llamacpp', 'api-key.txt'), 'utf8').trim(); }
-  catch { return ''; } // no key file = no header (a keyless server such as LM Studio)
-}
-const RECAP_KEY = process.env.SHEEPDOG_RECAP_KEY ?? defaultRecapKey();
+// Target (operator's call, 2026-08-21, evening): LM Studio again, by name - its
+// just-in-time loading brings qwen3-4b into VRAM on the first request and drops it
+// after an idle hour. The big 27B on :8099 is a night-only thing for the article
+// conveyor; the board never touches it. Any OpenAI-compatible server still works via
+// SHEEPDOG_RECAP_URL / SHEEPDOG_RECAP_MODEL / SHEEPDOG_RECAP_KEY (a bearer key is sent
+// only when one is configured). Thinking is switched off per request - with a
+// 120-token budget a thinking model would spend it all before answering; servers
+// without that switch ignore the flag.
+const RECAP_API = process.env.SHEEPDOG_RECAP_URL || 'http://127.0.0.1:1234/v1/chat/completions';
+const RECAP_MODEL = process.env.SHEEPDOG_RECAP_MODEL || 'qwen3-4b-instruct-2507';
+const RECAP_KEY = process.env.SHEEPDOG_RECAP_KEY ?? '';
 const RECAP_COOLDOWN_MS = 120_000;
-const aiRecapCache = new Map(); // file -> { mtime, at, text }
+const aiRecapCache = new Map(); // file -> { mtime, at, text, waits }
 const recapQueue = [];
 const queuedRecapFiles = new Set();
 let recapPumpBusy = false;
+
+// Verdicts survive a server restart on disk. Without this every restart wiped
+// the cache and the whole fleet got re-judged at once from scratch — cards
+// visibly jumped between columns until the queue caught up (operator,
+// 2026-08-21: "every time I look, everything is wrong").
+const RECAPS_FILE = path.join(STATE_DIR, 'recaps.json');
+let recapSaveTimer = null;
+function persistRecaps() {
+  if (recapSaveTimer) return;
+  recapSaveTimer = setTimeout(() => {
+    recapSaveTimer = null;
+    writeJsonAtomic(RECAPS_FILE, Object.fromEntries(aiRecapCache)).catch(() => {});
+  }, 2000);
+}
+async function loadRecaps() {
+  for (const [file, v] of Object.entries(await readJsonSoft(RECAPS_FILE, {}))) {
+    // at: 0 -> the cooldown never blocks a re-check, but an unchanged journal
+    // (same mtime) keeps its stored verdict without asking the model again.
+    if (v && typeof v.text === 'string') aiRecapCache.set(file, { mtime: v.mtime ?? 0, at: 0, text: v.text, waits: WAITS.has(v.waits) ? v.waits : 'none' });
+  }
+}
+
+// The verdict is a three-way classification, not a boolean. The old binary
+// "blocked" flag buried the load-bearing distinction (waits on a SYSTEM vs
+// waits on the OPERATOR) inside a subtle definition, and the small day model
+// regularly contradicted its own recap text ("ожидает CI" with blocked:false
+// - the misplacement of 2026-08-21). Explicit options plus few-shot examples
+// fixed every column-relevant case on a 14-session live calibration set; the
+// JSON schema below makes a malformed verdict impossible to emit.
+const WAITS = new Set(['user', 'system', 'none']);
+const RECAP_PROMPT = `Below is the tail of a working agent session journal (AGENT:/USER: messages, newest last).
+Reply with JSON: {"recap": "<one line, max 120 chars, in the same language the session speaks: what the session is doing right now>", "waits": "<user|system|none>"}.
+
+"waits" answers: judging by the LAST message, who must act before this session can move?
+- "system" = the session is stuck mid-task until an external SYSTEM finishes: a CI run / pipeline, a build or deploy queue, another machine, a rate limit, a long external job. The human operator has nothing to do right now.
+- "user" = the session's last word asks the human operator a question, offers him options, or hands him results for review / approval / acceptance - it cannot move without HIS word.
+- "none" = the session is actively working right now (its last word announces what it does next), or the task is fully closed and nothing is pending from anyone.
+If the last word both asks the operator and mentions an external wait, answer "user".
+A bare completion report ("done, pushed, all clean") with no question is "none", not "user".
+
+Examples:
+- AGENT: Жду зелёного CI на 3f52a7fc в очереди vps1, после этого мержу PR. -> {"recap": "Ждёт зелёного CI в очереди vps1 для мержа PR", "waits": "system"}
+- AGENT: Пакет готов. Нужен твой выбор: подача с PDF, с правками или отказ? -> {"recap": "Пакет готов, ждёт выбора по подаче", "waits": "user"}
+- AGENT: Отчёт готов. Публиковать с именами клиентов? Жду команды. -> {"recap": "Отчёт готов, ждёт команды на публикацию", "waits": "user"}
+- AGENT: Теперь проверяю оставшиеся боты и обновлю сторожа. -> {"recap": "Проверяет боты и обновляет сторожа", "waits": "none"}
+- AGENT: Всё закоммичено и запушено, дерево чистое. -> {"recap": "Работа завершена, всё запушено", "waits": "none"}
+- AGENT: API rate limit until 16:00, resuming the sweep after it lifts. -> {"recap": "Paused by API rate limit, resumes at 16:00", "waits": "system"}
+
+The journal tail:
+
+`;
+const RECAP_SCHEMA = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'verdict',
+    schema: {
+      type: 'object',
+      properties: {
+        recap: { type: 'string' },
+        waits: { type: 'string', enum: ['user', 'system', 'none'] },
+      },
+      required: ['recap', 'waits'],
+      additionalProperties: false,
+    },
+  },
+};
 
 async function readJournalTail(file, size) {
   const len = Math.min(262_144, size);
@@ -171,41 +233,40 @@ async function makeAiRecap(file) {
   }
   const ctx = msgs.slice(-12).join('\n---\n').slice(-6000);
   if (!ctx) return;
-  const res = await fetch(RECAP_API, {
+  // Any miss (server restarting between profiles, 401, timeout, empty answer) still stamps
+  // the cache: otherwise the 3-second /data poll re-queues the same file forever.
+  const miss = () => aiRecapCache.set(file, { mtime: 0, at: Date.now(), text: cached?.text ?? '', waits: cached?.waits ?? 'none' });
+  let res;
+  try {
+    res = await fetch(RECAP_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(RECAP_KEY ? { Authorization: `Bearer ${RECAP_KEY}` } : {}) },
     body: JSON.stringify({
-      model: RECAP_MODEL,
+      ...(RECAP_MODEL ? { model: RECAP_MODEL } : {}),
       chat_template_kwargs: { enable_thinking: false },
-      messages: [{
-        role: 'user',
-        content: 'Below is the tail of a working agent session journal. Reply with STRICT JSON '
-          + 'only, no code fences: {"recap": "<one line, max 120 chars, in the same language the '
-          + 'session speaks: what the session is doing right now>", "blocked": <true ONLY if the '
-          + 'session is stuck mid-task waiting on an external SYSTEM - a CI run, a build queue, '
-          + 'another machine, a rate limit. false in every other case, INCLUDING when it waits '
-          + 'for the human operator (their answer, decision, review or approval), is actively '
-          + 'working, or has finished its task>}\n\n' + ctx,
-      }],
-      temperature: 0.2,
-      max_tokens: 120,
+      messages: [{ role: 'user', content: RECAP_PROMPT + ctx }],
+      response_format: RECAP_SCHEMA,
+      temperature: 0, // deterministic: an unchanged journal must keep its verdict
+      max_tokens: 160,
     }),
     signal: AbortSignal.timeout(90_000),
-  });
-  if (!res.ok) throw new Error(`recap api ${res.status}`);
+    });
+    if (!res.ok) throw new Error(`recap api ${res.status}`);
+  } catch (e) { miss(); throw e; }
   const j = await res.json();
   const raw = String(j.choices?.[0]?.message?.content ?? '').replace(/^```(json)?|```$/gm, '').trim();
   let text = '';
-  let blocked = false;
+  let waits = cached?.waits ?? 'none'; // a malformed answer keeps the last verdict
   try {
     const parsed = JSON.parse(raw);
     text = String(parsed.recap ?? '');
-    blocked = parsed.blocked === true;
+    if (WAITS.has(parsed.waits)) waits = parsed.waits;
   } catch {
     text = raw; // the model ignored the shape - its words still beat nothing
   }
   text = text.replace(/\s+/g, ' ').trim().slice(0, 220);
-  if (text) aiRecapCache.set(file, { mtime: s.mtimeMs, at: Date.now(), text, blocked });
+  if (text) { aiRecapCache.set(file, { mtime: s.mtimeMs, at: Date.now(), text, waits }); persistRecaps(); }
+  else miss();
 }
 
 function scheduleAiRecap(file) {
@@ -487,8 +548,8 @@ async function collect() {
     if (!file) return;
     scheduleAiRecap(file);
     const ai = aiRecapCache.get(file);
-    const text = ai?.text ?? await lastAssistantText(file);
-    if (text) recapByPane.set(a.pane_id, { text, blocked: ai?.blocked === true });
+    const text = ai?.text || await lastAssistantText(file);
+    if (text) recapByPane.set(a.pane_id, { text, waits: WAITS.has(ai?.waits) ? ai.waits : 'none' });
   }));
   const repoByWs = new Map();
   // Linked worktrees only: a plain checkout also carries worktree.repo_name,
@@ -635,10 +696,11 @@ async function collect() {
       lastWorkingAt: p.agent_status === 'working' ? now : (seen[`${cwd}|~pulse`]?.last ?? null),
       title,
       recap: recapByPane.get(p.pane_id)?.text ?? null,
-      // The model's verdict: stuck mid-task on an external SYSTEM (CI, a
-      // queue, another machine). Waiting for the operator's word is NOT
-      // blocked - that case belongs in Decisions (operator, 2026-08-21).
-      recapBlocked: recapByPane.get(p.pane_id)?.blocked ?? false,
+      // The model's three-way verdict on who must act before the session can
+      // move: "system" = an external SYSTEM runs (CI, a queue, another
+      // machine) - work in flight, never a decision; "user" = the operator's
+      // word; "none" = working or fully done (operator, 2026-08-21).
+      recapWaits: recapByPane.get(p.pane_id)?.waits ?? 'none',
       agent: p.agent ?? null,
       since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,
     };
@@ -848,6 +910,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 await mkdir(STATE_DIR, { recursive: true });
+await loadRecaps();
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
     console.log(`Board already running: http://127.0.0.1:${PORT}`);
