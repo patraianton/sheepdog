@@ -159,50 +159,72 @@ async function loadRecaps() {
   }
 }
 
-// The verdict is a three-way classification, not a boolean. The old binary
-// "blocked" flag buried the load-bearing distinction (waits on a SYSTEM vs
-// waits on the OPERATOR) inside a subtle definition, and the small day model
-// regularly contradicted its own recap text ("ожидает CI" with blocked:false
-// - the misplacement of 2026-08-21). Explicit options plus few-shot examples
-// fixed every column-relevant case on a 14-session live calibration set; the
-// JSON schema below makes a malformed verdict impossible to emit.
+// The verdict is a three-way classification (user / system / none), and the
+// load-bearing half - "an external run is still in flight" - is NOT asked as
+// one subtle question over the whole tail: the small day model kept missing
+// "прогоны ещё в работе" mid-tail and kept over-weighting the newest message,
+// so one chat exchange with the operator knocked a CI-waiting card out of
+// Running (operator, 2026-08-21: "не прилипает он в ранинг"). Instead the
+// server asks three FACTS about one message at a time, newest first, and the
+// first message with any signal decides:
+//   waiting  -> the run is still in flight -> "system"
+//   finished / detached -> it is not -> fall through to the needs-user check
+// No signal at all keeps the previous "system" verdict (an idle session
+// cannot end an external wait by itself; only an explicit finish/detach or
+// its own new activity can). Verified per-message on a 15-session live
+// calibration set: both real CI waits found, zero false positives.
 const WAITS = new Set(['user', 'system', 'none']);
 const RECAP_PROMPT = `Below is the tail of a working agent session journal (AGENT:/USER: messages, newest last).
-Reply with JSON: {"recap": "<one line, max 120 chars, in the same language the session speaks: what the session is doing right now>", "waits": "<user|system|none>"}.
-
-"waits" answers: judging by the LAST message, who must act before this session can move?
-- "system" = the session is stuck mid-task until an external SYSTEM finishes: a CI run / pipeline, a build or deploy queue, another machine, a rate limit, a long external job. The human operator has nothing to do right now.
-- "user" = the session's last word asks the human operator a question, offers him options, or hands him results for review / approval / acceptance - it cannot move without HIS word.
-- "none" = the session is actively working right now (its last word announces what it does next), or the task is fully closed and nothing is pending from anyone.
-If the last word both asks the operator and mentions an external wait, answer "user".
-A bare completion report ("done, pushed, all clean") with no question is "none", not "user".
-
-Examples:
-- AGENT: Жду зелёного CI на 3f52a7fc в очереди vps1, после этого мержу PR. -> {"recap": "Ждёт зелёного CI в очереди vps1 для мержа PR", "waits": "system"}
-- AGENT: Пакет готов. Нужен твой выбор: подача с PDF, с правками или отказ? -> {"recap": "Пакет готов, ждёт выбора по подаче", "waits": "user"}
-- AGENT: Отчёт готов. Публиковать с именами клиентов? Жду команды. -> {"recap": "Отчёт готов, ждёт команды на публикацию", "waits": "user"}
-- AGENT: Теперь проверяю оставшиеся боты и обновлю сторожа. -> {"recap": "Проверяет боты и обновляет сторожа", "waits": "none"}
-- AGENT: Всё закоммичено и запушено, дерево чистое. -> {"recap": "Работа завершена, всё запушено", "waits": "none"}
-- AGENT: API rate limit until 16:00, resuming the sweep after it lifts. -> {"recap": "Paused by API rate limit, resumes at 16:00", "waits": "system"}
+Reply with JSON: {"recap": "<one line, max 120 chars, in the same language the session speaks: what the session is doing right now>"}
 
 The journal tail:
 
 `;
-const RECAP_SCHEMA = {
-  type: 'json_schema',
-  json_schema: {
-    name: 'verdict',
-    schema: {
-      type: 'object',
-      properties: {
-        recap: { type: 'string' },
-        waits: { type: 'string', enum: ['user', 'system', 'none'] },
-      },
-      required: ['recap', 'waits'],
-      additionalProperties: false,
-    },
-  },
-};
+const MSG_PROMPT = `Below is ONE message from a working agent's session log. External system runs are: a CI run / pipeline, a build / deploy roll-out, an acceptance queue, a prod probe / smoke check that has not reported yet, a job running on another machine or in another lane, a rate-limit pause, a long external process. Waiting for the human's answer is NOT an external run. The session doing its own work right now (measuring, writing, checking, coding) is NOT an external run either.
+
+Answer three facts about THIS message only. A message often mentions several runs - answer about the NEWEST state it describes:
+- "waiting": does it state that ANY such external run is right now still running, rolling out, queued, writing, or not yet reported - even if OTHER runs in the same message already finished?
+- "finished": does it state that an external run completed, went green, failed, or was cancelled - and mention NO other run still under way?
+- "detached": does it state that the session stopped watching or tracking such a run, abandoned it, or handed it off (e.g. stopped its watcher, closed out with a handover while the run still queues)?
+
+Reply with JSON: {"waiting": true|false, "finished": true|false, "detached": true|false}
+
+The message:
+
+`;
+const USER_PROMPT = `Below is the tail of a working agent session journal (AGENT:/USER: messages, newest last).
+Question: judging by the session's LAST message, does the session need the human operator's word to proceed - it asked him a question, offered him options, or handed him results for review / approval? A bare completion report ("done, pushed, all clean") with no question means false. Actively continuing work means false.
+Reply with JSON: {"needs_user": true|false}
+
+The journal tail:
+
+`;
+function jsonSchema(name, properties) {
+  return { type: 'json_schema', json_schema: { name, schema: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false } } };
+}
+const RECAP_SCHEMA = jsonSchema('recap', { recap: { type: 'string' } });
+const MSG_SCHEMA = jsonSchema('facts', { waiting: { type: 'boolean' }, finished: { type: 'boolean' }, detached: { type: 'boolean' } });
+const USER_SCHEMA = jsonSchema('needs', { needs_user: { type: 'boolean' } });
+
+async function askModel(content, schema, maxTokens) {
+  const res = await fetch(RECAP_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(RECAP_KEY ? { Authorization: `Bearer ${RECAP_KEY}` } : {}) },
+    body: JSON.stringify({
+      ...(RECAP_MODEL ? { model: RECAP_MODEL } : {}),
+      chat_template_kwargs: { enable_thinking: false },
+      messages: [{ role: 'user', content }],
+      response_format: schema,
+      temperature: 0, // deterministic: an unchanged journal must keep its verdict
+      max_tokens: maxTokens,
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(`recap api ${res.status}`);
+  const j = await res.json();
+  const raw = String(j.choices?.[0]?.message?.content ?? '').replace(/^```(json)?|```$/gm, '').trim();
+  return JSON.parse(raw);
+}
 
 async function readJournalTail(file, size) {
   const len = Math.min(262_144, size);
@@ -236,35 +258,30 @@ async function makeAiRecap(file) {
   // Any miss (server restarting between profiles, 401, timeout, empty answer) still stamps
   // the cache: otherwise the 3-second /data poll re-queues the same file forever.
   const miss = () => aiRecapCache.set(file, { mtime: 0, at: Date.now(), text: cached?.text ?? '', waits: cached?.waits ?? 'none' });
-  let res;
-  try {
-    res = await fetch(RECAP_API, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(RECAP_KEY ? { Authorization: `Bearer ${RECAP_KEY}` } : {}) },
-    body: JSON.stringify({
-      ...(RECAP_MODEL ? { model: RECAP_MODEL } : {}),
-      chat_template_kwargs: { enable_thinking: false },
-      messages: [{ role: 'user', content: RECAP_PROMPT + ctx }],
-      response_format: RECAP_SCHEMA,
-      temperature: 0, // deterministic: an unchanged journal must keep its verdict
-      max_tokens: 160,
-    }),
-    signal: AbortSignal.timeout(90_000),
-    });
-    if (!res.ok) throw new Error(`recap api ${res.status}`);
-  } catch (e) { miss(); throw e; }
-  const j = await res.json();
-  const raw = String(j.choices?.[0]?.message?.content ?? '').replace(/^```(json)?|```$/gm, '').trim();
   let text = '';
-  let waits = cached?.waits ?? 'none'; // a malformed answer keeps the last verdict
+  let waits = cached?.waits ?? 'none';
   try {
-    const parsed = JSON.parse(raw);
-    text = String(parsed.recap ?? '');
-    if (WAITS.has(parsed.waits)) waits = parsed.waits;
-  } catch {
-    text = raw; // the model ignored the shape - its words still beat nothing
-  }
-  text = text.replace(/\s+/g, ' ').trim().slice(0, 220);
+    const recap = await askModel(RECAP_PROMPT + ctx, RECAP_SCHEMA, 160);
+    text = String(recap.recap ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
+
+    // External-run scan: one message at a time, newest first, first signal wins.
+    const agentMsgs = msgs.filter(m => m.startsWith('AGENT: ')).slice(-8);
+    let signal = null; // 'waiting' | 'over' | null
+    for (let i = agentMsgs.length - 1; i >= 0 && !signal; i--) {
+      const facts = await askModel(MSG_PROMPT + agentMsgs[i].slice(7, 3000), MSG_SCHEMA, 60);
+      // detached beats waiting inside one message: "stopped the watcher, the
+      // run still queues" names an unfinished run the session no longer waits on.
+      if (facts.detached === true) signal = 'over';
+      else if (facts.waiting === true) signal = 'waiting';
+      else if (facts.finished === true) signal = 'over';
+    }
+    if (signal === 'waiting') waits = 'system';
+    else if (signal === null && cached?.waits === 'system') waits = 'system'; // nothing contradicted the standing wait
+    else {
+      const need = await askModel(USER_PROMPT + ctx, USER_SCHEMA, 30);
+      waits = need.needs_user === true ? 'user' : 'none';
+    }
+  } catch (e) { miss(); throw e; }
   if (text) { aiRecapCache.set(file, { mtime: s.mtimeMs, at: Date.now(), text, waits }); persistRecaps(); }
   else miss();
 }
