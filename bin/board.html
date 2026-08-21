@@ -1396,8 +1396,9 @@ function isLive(card) {
 // rest last. This is how a starred card tops Standby without leaving it.
 function activityRank(card) {
   if (isLive(card)) return card.star ? 0 : 1;
-  if (card.star) return isAlarm(card) ? 2 : 3;
-  return 4;
+  if (waitsExternal(card)) return card.star ? 2 : 3;
+  if (card.star) return isAlarm(card) ? 4 : 5;
+  return 6;
 }
 
 function localDate(ms) {
@@ -1421,16 +1422,15 @@ function roleColumnOf(card) {
   if (card.focus) return 'focus';
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
-  // Running holds ONLY what actually runs: live sessions and cron work (idle
-  // between wakeups is normal). For a starred session that stands still, what
-  // it WAITS FOR decides the column (operator, 2026-08-21): waiting for the
-  // operator's word — Decisions; waiting on something external (CI, a queue,
-  // the Mac — the recap model's verdict) — that is not his decision, it
-  // parks in Standby at the top with its WAITS ON EXTERNAL bar. A starred
-  // window with no agent at all parks the same way with its MUST RUN alarm.
-  // Unstarred stalled cards just park.
-  if (isLive(card) || card.kind === 'cron') return 'running';
-  if (card.star && card.agent && !card.recapBlocked) return 'decisions';
+  // Running holds work in motion: live sessions, cron work (idle between
+  // wakeups is normal), and sessions whose work an external system is
+  // running right now — CI, a queue, the Mac (operator, 2026-08-21: "waits
+  // on CI" is neither his decision nor a parked project). A starred session
+  // waiting for the operator's word goes to Decisions. A starred window
+  // with no agent parks in Standby at the top with its MUST RUN alarm;
+  // unstarred stalled cards just park.
+  if (isLive(card) || card.kind === 'cron' || waitsExternal(card)) return 'running';
+  if (card.star && card.agent) return 'decisions';
   return 'parked';
 }
 
@@ -1440,18 +1440,21 @@ function roleColumnOf(card) {
 // lamp stays visible whatever column the role put it in.
 function thinCard(card, columnKey) {
   if (columnKey !== 'tools' && columnKey !== 'parked' && columnKey !== 'running') return false;
-  return !(card.status === 'working' || card.status === 'done' || card.remote || hasPulse(card) || isAlarm(card));
+  return !(card.status === 'working' || card.status === 'done' || card.remote || hasPulse(card) || waitsExternal(card) || isAlarm(card));
+}
+
+// Waiting on an external system (CI, a queue, another machine — the recap
+// model's verdict) is work in flight, not a parked project and not an alarm
+// (operator, 2026-08-21): the external system is doing the running.
+function waitsExternal(card) {
+  return Boolean(card.agent && card.recapBlocked && !isLive(card));
 }
 
 function isAlarm(card) {
-  // A star alarms when it is not actually moving: no live signal at all, or
-  // the recap model judged it stuck on something outside itself (a sleeping
-  // Mac, an approval) even while the pulse still looks fresh. A session that
-  // is working RIGHT NOW (or whose Mac twin runs) outranks the model's
-  // reading of the transcript — "waiting for a report" while visibly busy is
-  // not stuck (false alarm on search-page, 2026-08-20).
-  return Boolean(card.star && card.status !== 'working' && !card.remote
-    && (card.recapBlocked || !hasPulse(card)));
+  // A star alarms only when nothing moves at all: the session is not
+  // working, no Mac twin, no external system running for it, and even the
+  // pulse has gone stale.
+  return Boolean(card.star && !isLive(card) && !waitsExternal(card) && !hasPulse(card));
 }
 
 // Two names say the same thing when one is contained in the other — the
@@ -1603,8 +1606,9 @@ function fullCard(card, columnKey) {
         </div>
         ${controlRack(card, expanded.has(card.id))}
       </div>
-      ${alarm ? `<div class="alarm-annunciator" title="Must not stop, but stuck"><span class="alarm-icon">!</span><span class="alarm-copy">${card.recapBlocked ? 'Must run · waits on external' : 'Must run · signal idle'}</span><small>ATTN</small></div>` : ''}
+      ${alarm ? `<div class="alarm-annunciator" title="Must not stop, but stuck"><span class="alarm-icon">!</span><span class="alarm-copy">Must run · signal idle</span><small>ATTN</small></div>` : ''}
       ${liveStar ? `<div class="alarm-annunciator live" title="Starred and running"><span class="alarm-icon">★</span><span class="alarm-copy">Star project · running</span><small>LIVE</small></div>` : ''}
+      ${waitsExternal(card) ? `<div class="system-strip" title="An external system is doing the running"><b>⏳ EXTERNAL</b><span>waiting on an external system (CI, queue, machine)</span></div>` : ''}
       ${noteStrip(card)}
       ${taskLine}
       ${remoteLine}
