@@ -7,8 +7,6 @@
 import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { readFile, writeFile, rename, mkdir, stat, open } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -123,19 +121,8 @@ async function lastAssistantText(file) {
 // with a per-file cooldown — the 3-second /data poll never waits for the
 // GPU; until a summary exists the card falls back to the last-words line,
 // and if the local server is down nothing breaks.
-// Default target (operator's call, 2026-08-21): the always-on llama-server
-// (qwen3.8-27b on :8099) instead of LM Studio, so no second model gets
-// auto-loaded into the GPU. That server wants a bearer key (read from its key
-// file unless SHEEPDOG_RECAP_KEY is set) and thinks before answering unless
-// told not to - with a 120-token budget the thinking would eat the whole
-// reply, so thinking is switched off per request (LM Studio ignores the flag).
-const RECAP_API = process.env.SHEEPDOG_RECAP_URL || 'http://127.0.0.1:8099/v1/chat/completions';
-const RECAP_MODEL = process.env.SHEEPDOG_RECAP_MODEL || 'qwen3.8-27b';
-function defaultRecapKey() {
-  try { return readFileSync(path.join(homedir(), '.local', 'llamacpp', 'api-key.txt'), 'utf8').trim(); }
-  catch { return ''; } // no key file = no header (a keyless server such as LM Studio)
-}
-const RECAP_KEY = process.env.SHEEPDOG_RECAP_KEY ?? defaultRecapKey();
+const RECAP_API = process.env.SHEEPDOG_RECAP_URL || 'http://127.0.0.1:1234/v1/chat/completions';
+const RECAP_MODEL = process.env.SHEEPDOG_RECAP_MODEL || 'qwen3-4b-instruct-2507';
 const RECAP_COOLDOWN_MS = 120_000;
 const aiRecapCache = new Map(); // file -> { mtime, at, text }
 const recapQueue = [];
@@ -173,19 +160,17 @@ async function makeAiRecap(file) {
   if (!ctx) return;
   const res = await fetch(RECAP_API, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(RECAP_KEY ? { Authorization: `Bearer ${RECAP_KEY}` } : {}) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: RECAP_MODEL,
-      chat_template_kwargs: { enable_thinking: false },
       messages: [{
         role: 'user',
         content: 'Below is the tail of a working agent session journal. Reply with STRICT JSON '
           + 'only, no code fences: {"recap": "<one line, max 120 chars, in the same language the '
-          + 'session speaks: what the session is doing right now>", "blocked": <true ONLY if the '
-          + 'session is stuck mid-task waiting on an external SYSTEM - a CI run, a build queue, '
-          + 'another machine, a rate limit. false in every other case, INCLUDING when it waits '
-          + 'for the human operator (their answer, decision, review or approval), is actively '
-          + 'working, or has finished its task>}\n\n' + ctx,
+          + 'session speaks: what the session is doing right now>", "blocked": <true only if the '
+          + 'session is stuck mid-task waiting on something outside itself - an operator action, '
+          + 'another machine, an approval, a resource; false if it is actively working or has '
+          + 'finished its task>}\n\n' + ctx,
       }],
       temperature: 0.2,
       max_tokens: 120,
@@ -635,9 +620,7 @@ async function collect() {
       lastWorkingAt: p.agent_status === 'working' ? now : (seen[`${cwd}|~pulse`]?.last ?? null),
       title,
       recap: recapByPane.get(p.pane_id)?.text ?? null,
-      // The model's verdict: stuck mid-task on an external SYSTEM (CI, a
-      // queue, another machine). Waiting for the operator's word is NOT
-      // blocked - that case belongs in Decisions (operator, 2026-08-21).
+      // The model's verdict: stuck mid-task on something outside itself.
       recapBlocked: recapByPane.get(p.pane_id)?.blocked ?? false,
       agent: p.agent ?? null,
       since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,

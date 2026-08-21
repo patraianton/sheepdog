@@ -1422,14 +1422,15 @@ function roleColumnOf(card) {
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
   // Running holds ONLY what actually runs: live sessions and cron work (idle
-  // between wakeups is normal). For what stands still, the star splits two
-  // cases (operator, 2026-08-20): a starred session whose agent is ALIVE but
-  // stopped is waiting for the operator's next word — that is a decision on
-  // him. A starred window with no agent at all ("not started") is not a
-  // decision — it parks in Standby, lifted to the top with its MUST RUN
-  // alarm. Unstarred stalled cards just park.
+  // between wakeups is normal). For a starred session that stands still, what
+  // it WAITS FOR decides the column (operator, 2026-08-21): waiting for the
+  // operator's word — Decisions; waiting on something external (CI, a queue,
+  // the Mac — the recap model's verdict) — that is not his decision, it
+  // parks in Standby at the top with its WAITS ON EXTERNAL bar. A starred
+  // window with no agent at all parks the same way with its MUST RUN alarm.
+  // Unstarred stalled cards just park.
   if (isLive(card) || card.kind === 'cron') return 'running';
-  if (card.star && card.agent) return 'decisions';
+  if (card.star && card.agent && !card.recapBlocked) return 'decisions';
   return 'parked';
 }
 
