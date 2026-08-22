@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process';
 import { readFile, writeFile, rename, mkdir, stat, open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createFacts, journalFacts, decideMotion, SAYS_WAITS } from './session-facts.mjs';
 
 const PORT = 4877;
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -76,8 +77,9 @@ async function findSessionFile(sid, cwd) {
   const hit = sessionPathCache.get(sid);
   if (hit && (hit.file || Date.now() - hit.at < 300_000)) return hit.file;
   // Journals live under <root>/projects/<escaped cwd>/<session id>.jsonl,
-  // where the escape turns ':', '\' and '.' into '-'.
-  const escaped = String(cwd).replace(/[:\\/.]/g, '-');
+  // where the escape turns every character but letters and digits into '-'
+  // ('_conveyor' becomes '-conveyor', checked 2026-08-22).
+  const escaped = String(cwd).replace(/[^A-Za-z0-9]/g, '-');
   const roots = [path.join(HOME, '.claude')];
   try {
     const { readdir } = await import('node:fs/promises');
@@ -133,16 +135,22 @@ const RECAP_API = process.env.SHEEPDOG_RECAP_URL || 'http://127.0.0.1:1234/v1/ch
 const RECAP_MODEL = process.env.SHEEPDOG_RECAP_MODEL || 'qwen3-4b-instruct-2507';
 const RECAP_KEY = process.env.SHEEPDOG_RECAP_KEY ?? '';
 const RECAP_COOLDOWN_MS = 120_000;
-const aiRecapCache = new Map(); // file -> { mtime, at, text, waits }
+const aiRecapCache = new Map(); // file -> { mtime, hash, at, text }
 const recapQueue = [];
 const queuedRecapFiles = new Set();
 let recapPumpBusy = false;
 
-// Verdicts survive a server restart on disk. Without this every restart wiped
-// the cache and the whole fleet got re-judged at once from scratch — cards
-// visibly jumped between columns until the queue caught up (operator,
-// 2026-08-21: "every time I look, everything is wrong").
+// Recap lines survive a server restart on disk. Without this every restart
+// wiped the cache and the whole fleet got re-summarised at once from scratch
+// (operator, 2026-08-21: "every time I look, everything is wrong").
+// The model writes ONLY the recap line. Until 2026-08-22 it also issued a
+// who-does-the-session-wait-on verdict that decided the Running-⏳ column;
+// a review panel showed the text could not carry that (a sentence from the
+// day before kept a dead CI wait green for 22 hours, and no reading of the
+// same prose did better than 9/12 on live ground truth). The column now comes
+// from facts — see session-facts.mjs. Old "waits" fields on disk are ignored.
 const RECAPS_FILE = path.join(STATE_DIR, 'recaps.json');
+const RECAPS_KEEP_MS = 24 * 3600 * 1000;
 let recapSaveTimer = null;
 function persistRecaps() {
   if (recapSaveTimer) return;
@@ -152,49 +160,21 @@ function persistRecaps() {
   }, 2000);
 }
 async function loadRecaps() {
-  for (const [file, v] of Object.entries(await readJsonSoft(RECAPS_FILE, {}))) {
-    // at: 0 -> the cooldown never blocks a re-check, but an unchanged journal
-    // (same mtime) keeps its stored verdict without asking the model again.
-    if (v && typeof v.text === 'string') aiRecapCache.set(file, { mtime: v.mtime ?? 0, at: 0, text: v.text, waits: WAITS.has(v.waits) ? v.waits : 'none' });
+  const stored = await readJsonSoft(RECAPS_FILE, {});
+  for (const [file, v] of Object.entries(stored)) {
+    if (!v || typeof v.text !== 'string') continue;
+    // Entries of rotated journals and day-old lines are dropped on load —
+    // the file used to hoard 15-hour-old entries of journals nobody reads.
+    if (Date.now() - (v.at ?? 0) > RECAPS_KEEP_MS) continue;
+    if (!await stat(file).then(() => true, () => false)) continue;
+    // The stored `at` is old enough that the cooldown never blocks a re-check,
+    // and an unchanged tail (same hash) keeps its line without a model call.
+    aiRecapCache.set(file, { mtime: v.mtime ?? 0, hash: v.hash ?? '', at: v.at ?? 0, text: v.text });
   }
 }
 
-// The verdict is a three-way classification (user / system / none), and the
-// load-bearing half - "an external run is still in flight" - is NOT asked as
-// one subtle question over the whole tail: the small day model kept missing
-// "прогоны ещё в работе" mid-tail and kept over-weighting the newest message,
-// so one chat exchange with the operator knocked a CI-waiting card out of
-// Running (operator, 2026-08-21: "не прилипает он в ранинг"). Instead the
-// server asks three FACTS about one message at a time, newest first, and the
-// first message with any signal decides:
-//   waiting  -> the run is still in flight -> "system"
-//   finished / detached -> it is not -> fall through to the needs-user check
-// No signal at all keeps the previous "system" verdict (an idle session
-// cannot end an external wait by itself; only an explicit finish/detach or
-// its own new activity can). Verified per-message on a 15-session live
-// calibration set: both real CI waits found, zero false positives.
-const WAITS = new Set(['user', 'system', 'none']);
 const RECAP_PROMPT = `Below is the tail of a working agent session journal (AGENT:/USER: messages, newest last).
 Reply with JSON: {"recap": "<one line, max 120 chars, in the same language the session speaks: what the session is doing right now>"}
-
-The journal tail:
-
-`;
-const MSG_PROMPT = `Below is ONE message from a working agent's session log. External system runs are: a CI run / pipeline, a build / deploy roll-out, an acceptance queue, a prod probe / smoke check that has not reported yet, a job running on another machine or in another lane, a rate-limit pause, a long external process. Waiting for the human's answer is NOT an external run. The session doing its own work right now (measuring, writing, checking, coding) is NOT an external run either.
-
-Answer three facts about THIS message only. A message often mentions several runs - answer about the NEWEST state it describes:
-- "waiting": does it state that ANY such external run is right now still running, rolling out, queued, writing, or not yet reported - even if OTHER runs in the same message already finished?
-- "finished": does it state that an external run completed, went green, failed, or was cancelled - and mention NO other run still under way?
-- "detached": does it state that the session stopped watching or tracking such a run, abandoned it, or handed it off (e.g. stopped its watcher, closed out with a handover while the run still queues)?
-
-Reply with JSON: {"waiting": true|false, "finished": true|false, "detached": true|false}
-
-The message:
-
-`;
-const USER_PROMPT = `Below is the tail of a working agent session journal (AGENT:/USER: messages, newest last).
-Question: judging by the session's LAST message, does the session need the human operator's word to proceed - it asked him a question, offered him options, or handed him results for review / approval? A bare completion report ("done, pushed, all clean") with no question means false. Actively continuing work means false.
-Reply with JSON: {"needs_user": true|false}
 
 The journal tail:
 
@@ -203,8 +183,6 @@ function jsonSchema(name, properties) {
   return { type: 'json_schema', json_schema: { name, schema: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false } } };
 }
 const RECAP_SCHEMA = jsonSchema('recap', { recap: { type: 'string' } });
-const MSG_SCHEMA = jsonSchema('facts', { waiting: { type: 'boolean' }, finished: { type: 'boolean' }, detached: { type: 'boolean' } });
-const USER_SCHEMA = jsonSchema('needs', { needs_user: { type: 'boolean' } });
 
 async function askModel(content, schema, maxTokens) {
   const res = await fetch(RECAP_API, {
@@ -255,34 +233,23 @@ async function makeAiRecap(file) {
   }
   const ctx = msgs.slice(-12).join('\n---\n').slice(-6000);
   if (!ctx) return;
+  // The journal file's mtime moves without new content (idle-handover copies
+  // touch it hourly), so the cache is keyed on the extracted tail itself: an
+  // unchanged tail keeps its line without a model call.
+  const hash = strHash(ctx);
+  if (cached && cached.hash === hash && cached.text) {
+    aiRecapCache.set(file, { ...cached, mtime: s.mtimeMs, at: Date.now() });
+    return;
+  }
   // Any miss (server restarting between profiles, 401, timeout, empty answer) still stamps
   // the cache: otherwise the 3-second /data poll re-queues the same file forever.
-  const miss = () => aiRecapCache.set(file, { mtime: 0, at: Date.now(), text: cached?.text ?? '', waits: cached?.waits ?? 'none' });
+  const miss = () => aiRecapCache.set(file, { mtime: 0, hash: cached?.hash ?? '', at: Date.now(), text: cached?.text ?? '' });
   let text = '';
-  let waits = cached?.waits ?? 'none';
   try {
     const recap = await askModel(RECAP_PROMPT + ctx, RECAP_SCHEMA, 160);
     text = String(recap.recap ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
-
-    // External-run scan: one message at a time, newest first, first signal wins.
-    const agentMsgs = msgs.filter(m => m.startsWith('AGENT: ')).slice(-8);
-    let signal = null; // 'waiting' | 'over' | null
-    for (let i = agentMsgs.length - 1; i >= 0 && !signal; i--) {
-      const facts = await askModel(MSG_PROMPT + agentMsgs[i].slice(7, 3000), MSG_SCHEMA, 60);
-      // detached beats waiting inside one message: "stopped the watcher, the
-      // run still queues" names an unfinished run the session no longer waits on.
-      if (facts.detached === true) signal = 'over';
-      else if (facts.waiting === true) signal = 'waiting';
-      else if (facts.finished === true) signal = 'over';
-    }
-    if (signal === 'waiting') waits = 'system';
-    else if (signal === null && cached?.waits === 'system') waits = 'system'; // nothing contradicted the standing wait
-    else {
-      const need = await askModel(USER_PROMPT + ctx, USER_SCHEMA, 30);
-      waits = need.needs_user === true ? 'user' : 'none';
-    }
   } catch (e) { miss(); throw e; }
-  if (text) { aiRecapCache.set(file, { mtime: s.mtimeMs, at: Date.now(), text, waits }); persistRecaps(); }
+  if (text) { aiRecapCache.set(file, { mtime: s.mtimeMs, hash, at: Date.now(), text }); persistRecaps(); }
   else miss();
 }
 
@@ -441,6 +408,9 @@ function updateSeen(seen, agentList, nowIso) {
 // Off by default: set SHEEPDOG_REMOTE_HOST to an ssh alias to enable.
 const REMOTE_HOST = process.env.SHEEPDOG_REMOTE_HOST || '';
 const REMOTE_FILE = path.join(STATE_DIR, 'remote-bridge.json');
+// Motion facts (live watcher processes per pane): swept in the background
+// every 20 s while the board is open; see session-facts.mjs.
+const facts = createFacts();
 const REMOTE_STALE_MS = 300_000; // every 5 minutes, and only while the board is open
 let remoteState = { checkedAt: 0, ok: false, hints: [] };
 let remoteChecking = false;
@@ -557,8 +527,16 @@ async function collect() {
   // Recap lines: only panes with an attached agent have a session journal.
   // The local-model summary wins when it exists; the session's last words
   // fill in until the background queue catches up (or the model is down).
+  // The same journal yields the motion FACTS (pending counters, scheduled
+  // wake-up, killed watchers, newest line) — see session-facts.mjs.
+  const agentList = agentListRes?.result?.agents ?? [];
+  // The first sweep is awaited (a page opened after a quiet hour must not
+  // read FACTS OFFLINE); later ones run in the background every 20 s.
+  const sweeping = facts.sweep(agentList.some(a => a.agent_status === 'working'));
+  if (facts.checkedAt() === 0) await sweeping;
   const recapByPane = new Map();
-  await Promise.all((agentListRes?.result?.agents ?? []).map(async (a) => {
+  const journalByPane = new Map();
+  await Promise.all(agentList.map(async (a) => {
     const sid = a.agent_session?.value;
     if (!sid || !a.cwd || !a.pane_id) return;
     const file = await findSessionFile(sid, a.cwd);
@@ -566,7 +544,9 @@ async function collect() {
     scheduleAiRecap(file);
     const ai = aiRecapCache.get(file);
     const text = ai?.text || await lastAssistantText(file);
-    if (text) recapByPane.set(a.pane_id, { text, waits: WAITS.has(ai?.waits) ? ai.waits : 'none' });
+    if (text) recapByPane.set(a.pane_id, { text });
+    const jf = await journalFacts(file).catch(() => null);
+    if (jf) journalByPane.set(a.pane_id, jf);
   }));
   const repoByWs = new Map();
   // Linked worktrees only: a plain checkout also carries worktree.repo_name,
@@ -654,6 +634,8 @@ async function collect() {
   });
 
   const JUNK_TITLES = new Set(['Claude Code', 'claude · resume', 'codex · resume']);
+  const nowMs = Date.parse(now);
+  const waitRecords = new Map(); // seen key -> record to persist (or null to clear)
   const cards = cardPanes.map((p) => {
     const ws = wsById.get(p.workspace_id);
     const tab = tabById.get(p.tab_id);
@@ -676,6 +658,23 @@ async function collect() {
       const born = seen[`${cwd}|~t:${strHash(title)}`]?.since;
       if (born && Date.parse(now) - Date.parse(born) > 72 * 3600 * 1000) title = '';
     }
+    // Work in motion for an idle session is a FACT about the machine: a live
+    // watcher process of this pane, a pending workflow/agent counter, or a
+    // scheduled wake-up — never the recap's wording (operator, 2026-08-22).
+    // The wait record is per PANE (several panes of one folder each have
+    // their own watchers); the key still starts with the folder so the
+    // seen.json housekeeping treats it like the other "~" service keys.
+    const waitKey = cwd ? `${cwd}|~wait:${p.pane_id}` : null;
+    const journal = journalByPane.get(p.pane_id) ?? null;
+    const { motion, record, paused } = decideMotion({
+      agent: p.agent ?? null, status: p.agent_status,
+      procs: facts.processesOf(p.pane_id), journal,
+      prev: waitKey ? (seen[waitKey] ?? null) : null, now: nowMs,
+    });
+    // A working turn between two watchers leaves the record alone: the wait
+    // resumes with its start time once the session is idle again.
+    if (waitKey && p.agent_status !== 'working') waitRecords.set(waitKey, record);
+    const recapText = recapByPane.get(p.pane_id)?.text ?? null;
     return {
       id: p.pane_id,
       tabId: p.tab_id,
@@ -712,15 +711,39 @@ async function collect() {
         .map(a => ({ name: a.name, url: a.url, pending: a.pending })),
       lastWorkingAt: p.agent_status === 'working' ? now : (seen[`${cwd}|~pulse`]?.last ?? null),
       title,
-      recap: recapByPane.get(p.pane_id)?.text ?? null,
-      // The model's three-way verdict on who must act before the session can
-      // move: "system" = an external SYSTEM runs (CI, a queue, another
-      // machine) - work in flight, never a decision; "user" = the operator's
-      // word; "none" = working or fully done (operator, 2026-08-21).
-      recapWaits: recapByPane.get(p.pane_id)?.waits ?? 'none',
+      recap: recapText,
+      // motion = what the machine can show running for this session right
+      // now ({kind: proc|bg|wake, label, since, grace?}) or null. paused = the
+      // harness's own rate-limit line is the session's last word: nothing
+      // will resume it but the operator. saysWaits = the recap merely SAYS it
+      // waits — decoration for the grey hedge line, never a column input.
+      motion,
+      paused: Boolean(paused),
+      // When the limit lifts (ISO or null) and whether the harness still
+      // promises to continue by itself then (a tab sent to the background
+      // withdraws that promise — the journal says so).
+      pause: paused ? {
+        since: journal?.pausedAt ? new Date(journal.pausedAt).toISOString() : null,
+        resetsAt: journal?.resetsAt ? new Date(journal.resetsAt).toISOString() : null,
+        autoResume: Boolean(journal?.autoResume),
+      } : null,
+      saysWaits: Boolean(recapText && SAYS_WAITS.test(recapText)),
+      lastLineAt: journal?.lastLineAt ? new Date(journal.lastLineAt).toISOString() : null,
       agent: p.agent ?? null,
       since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,
     };
+  });
+
+  // Persist each pane's current wait so a re-arming watcher keeps its start
+  // time and its grace across polls and restarts; a pane with no wait left
+  // loses the key once the grace has run out.
+  await queued(async () => {
+    let dirty = false;
+    for (const [key, record] of waitRecords) {
+      if (record) { if (JSON.stringify(seen[key]) !== JSON.stringify(record)) { seen[key] = record; dirty = true; } }
+      else if (seen[key]) { delete seen[key]; dirty = true; }
+    }
+    if (dirty) await writeJsonAtomic(SEEN_FILE, seen);
   });
 
   return {
@@ -730,6 +753,9 @@ async function collect() {
     windows: (snap.workspaces ?? []).length,
     focusedTab: snap.focused_tab_id ?? null,
     remote: { ok: remoteState.ok, tasks: remoteState.hints },
+    // The fact sweep's own health: when it is down or silently blind the page
+    // says so — a quiet fleet and a broken sweep must never look the same.
+    facts: facts.health(),
     lavish: {
       ok: lavishState.ok,
       // Count what the board actually shows: blockers on cards plus loose

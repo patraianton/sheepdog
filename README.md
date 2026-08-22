@@ -32,7 +32,22 @@ session straight from herdr and lays it out as a kanban:
   Studio at `127.0.0.1:1234`) summarizes each live session's journal tail
   into one line, in a serial background queue so the board's poll never
   waits for the GPU. Until a summary exists — or if the model server is
-  down — the card shows the session's last words instead.
+  down — the card shows the session's last words instead. The model only
+  writes that line; it never decides a column.
+- **Work in motion is a fact, not a sentence.** An idle session counts as
+  running (⏳ EXTERNAL) only when the machine can show something running
+  for it: a live watcher process of that pane (task shells carry the pane
+  id in their environment; one Git Bash `/proc` sweep every 20 s), a
+  pending background workflow/agent on the session's newest turn, or a
+  scheduled self-wake-up (⟳ NEXT ROUND). The strip names the thing from
+  its own command line ("CI #1101 · watching 7 min"). A vanished watcher
+  gets 20 minutes to re-arm; a killed one ends the wait at once; nothing
+  outlives two hours past the journal's newest line. A session that merely
+  *says* it waits gets a grey hedge line instead of a green strip. If the
+  sweep is down the header says FACTS OFFLINE. A session the harness
+  stopped on its usage limit shows a ⛔ USAGE LIMIT strip — when the limit
+  lifts and whether the session will continue by itself — and lands in
+  Decisions; a starred one alarms "Must run · usage limit".
 - **Refreshes every 3 seconds.** The "stuck for N h" timer shows how long a
   card has been sitting in its current state.
 - **Click a card to jump there.** The board focuses that herdr tab; the tab

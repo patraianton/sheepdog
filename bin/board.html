@@ -700,7 +700,22 @@
   .system-strip.lavish { border-color: #86407c; background: #2b1230; color: #f2a7e3; cursor: pointer; }
   .system-strip.lavish:hover { border-color: #d668c4; color: #ffd1f4; }
   .system-strip.due { border-color: #6d4a28; background: #2b1c0e; color: #ffc99a; }
+  .system-strip.wake { border-color: #3f5a78; background: #0f1d2c; color: #9cc4ee; }
+  .system-strip.paused { border-color: #7b3c43; background: #31181c; color: #ff9da0; }
   .system-strip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hedge-line {
+    margin-top: 4px;
+    padding-left: 2px;
+    color: #6b7a8a;
+    font-family: var(--telemetry);
+    font-size: 8px;
+    letter-spacing: .02em;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .facts-off { color: #ff9da0; }
 
   .telemetry {
     display: grid;
@@ -824,6 +839,7 @@
      (lavish, retire) grow to the left of them. */
   .signal.slot-empty { visibility: hidden; }
   .signal.noagent { color: var(--unknown); }
+  .signal.paused { color: #ff9da0; border-color: #7b3c43; }
   .signal {
     min-width: 18px;
     height: 17px;
@@ -1418,7 +1434,9 @@ function shortDate(iso) {
 // nothing (operator, 2026-08-21) — no page, date or star changes that: it
 // parks in Standby with all its signals still visible on the card.
 function roleColumnOf(card) {
-  if (card.agent && ((card.lavish ?? []).length || card.status === 'blocked' || dateDue(card))) return 'decisions';
+  // A session parked on the harness's own usage-limit line can only be
+  // resumed by the operator — that is his decision, star or no star.
+  if (card.agent && ((card.lavish ?? []).length || card.status === 'blocked' || dateDue(card) || card.paused)) return 'decisions';
   if (card.focus) return 'focus';
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
@@ -1443,11 +1461,58 @@ function thinCard(card, columnKey) {
   return !(card.status === 'working' || card.status === 'done' || card.remote || hasPulse(card) || waitsExternal(card) || isAlarm(card));
 }
 
-// Waiting on an external system (CI, a queue, another machine — the recap
-// model's verdict) is work in flight, not a parked project and not an alarm
-// (operator, 2026-08-21): the external system is doing the running.
+// Waiting on an external system (CI, a queue, another machine) is work in
+// flight, not a parked project and not an alarm (operator, 2026-08-21): the
+// external system is doing the running. Since 2026-08-22 this is a FACT the
+// server read off the machine — a live watcher process of this pane, a
+// pending workflow/agent counter, or a scheduled wake-up — never the recap's
+// wording: a sentence from the day before had kept a dead CI wait green for
+// 22 hours. No fact, no ⏳: the card goes where idle sessions go, keeping a
+// grey line that says what it claims to wait for and for how long.
 function waitsExternal(card) {
-  return Boolean(card.agent && card.recapWaits === 'system' && !isLive(card));
+  return Boolean(card.agent && card.motion && !isLive(card));
+}
+
+// The ⏳ / ⟳ strip: names the thing the machine sees and how long the board
+// has watched it — never how long the run itself has been going.
+function motionStrip(card) {
+  const m = card.motion;
+  if (!m) return '';
+  const watched = age(m.since);
+  const tail = m.grace ? ' · re-arming' : '';
+  if (m.kind === 'wake') {
+    return `<div class="system-strip wake" title="The session scheduled its own next round"><b>⟳ NEXT ROUND</b><span>${esc(m.label)}${tail}</span></div>`;
+  }
+  const head = m.kind === 'proc' && m.known === false ? '⏳ RUNNING' : '⏳ EXTERNAL';
+  const tip = m.cmd ? `Live for this pane: ${m.cmd}` : 'A background task of this session is still pending';
+  return `<div class="system-strip" title="${esc(tip)}"><b>${head}</b><span>${esc(m.label)}${watched ? ` · watching ${esc(watched)}` : ''}${tail}</span></div>`;
+}
+
+// The grey hedge: the recap SAYS the session waits, but nothing on the machine
+// runs for it — shown instead of a green strip, with the age of its last word,
+// so a card that left Running is an explained event, not a mystery.
+function hedgeLine(card) {
+  if (!card.agent || isLive(card) || card.motion || !card.saysWaits) return '';
+  const last = age(card.lastLineAt);
+  return `<div class="hedge-line" title="No live watcher, no pending task, no scheduled wake-up for this session">says it waits — nothing running here${last ? ` · last word ${esc(last)} ago` : ''}</div>`;
+}
+
+// Usage-limit words for the strip and the chip: when the limit lifts, and
+// whether the harness still promises to continue by itself at that time.
+function pauseWords(card) {
+  const p = card.pause || {};
+  const resetMs = p.resetsAt ? Date.parse(p.resetsAt) : NaN;
+  const lifted = !Number.isNaN(resetMs) && resetMs <= Date.now();
+  const at = Number.isNaN(resetMs) ? '' : new Date(resetMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  if (lifted) return `limit lifted at ${at} — nothing resumed it, bring it back by hand`;
+  if (p.autoResume) return `usage limit · resumes by itself at ${at || '?'}`;
+  return `usage limit${at ? ` · resets ${at}` : ''} — resume by hand or switch model`;
+}
+
+function pausedStrip(card) {
+  if (!card.paused) return '';
+  const since = age(card.pause?.since);
+  return `<div class="system-strip paused" title="The harness stopped this session on its usage limit${since ? ` ${esc(since)} ago` : ''}"><b>⛔ USAGE LIMIT</b><span>${esc(pauseWords(card))}</span></div>`;
 }
 
 function isAlarm(card) {
@@ -1606,11 +1671,13 @@ function fullCard(card, columnKey) {
         </div>
         ${controlRack(card, expanded.has(card.id))}
       </div>
-      ${alarm ? `<div class="alarm-annunciator" title="Must not stop, but stuck"><span class="alarm-icon">!</span><span class="alarm-copy">Must run · signal idle</span><small>ATTN</small></div>` : ''}
+      ${alarm ? `<div class="alarm-annunciator" title="${card.paused ? 'Must not stop, but the harness stopped it on its usage limit' : 'Must not stop, but stuck'}"><span class="alarm-icon">!</span><span class="alarm-copy">Must run · ${card.paused ? 'usage limit' : 'signal idle'}</span><small>ATTN</small></div>` : ''}
       ${liveStar ? `<div class="alarm-annunciator live" title="Starred and running"><span class="alarm-icon">★</span><span class="alarm-copy">Star project · running</span><small>LIVE</small></div>` : ''}
-      ${waitsExternal(card) ? `<div class="system-strip" title="An external system is doing the running"><b>⏳ EXTERNAL</b><span>waiting on an external system (CI, queue, machine)</span></div>` : ''}
+      ${waitsExternal(card) ? motionStrip(card) : ''}
+      ${pausedStrip(card)}
       ${noteStrip(card)}
       ${taskLine}
+      ${hedgeLine(card)}
       ${remoteLine}
       ${retireLine}
       ${dueLine}
@@ -1638,6 +1705,7 @@ function compactCard(card, options = {}) {
     : '';
   const signals = [
     card.status === 'unknown' ? `<span class="signal noagent" title="No agent in this window — bring the session back">○</span>` : '',
+    card.paused ? `<span class="signal paused" title="${esc(pauseWords(card))}">⛔</span>` : '',
     retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : '',
     card.checkDate ? `<span class="signal date" title="Check back on ${esc(card.checkDate)}">${esc(shortDate(card.checkDate))}</span>` : '',
     card.kind ? `<span class="signal kind" title="Kind: ${esc(card.kind)}">${KIND_LABEL[card.kind]}</span>` : '',
@@ -1651,7 +1719,9 @@ function compactCard(card, options = {}) {
   const actions = (card.cwd
     ? (mine ? focusPickControl(card) : '') + starControl(card) + (mine ? roleControl(card) : '') + prioControl(card) + (mine ? dateControl(card) : '') + (mine ? noteControl(card) : '')
     : '') + powerControl(card) + focusControl();
-  return `<article class="flight-card compact ${card.status === 'unknown' ? 'unknown-card' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.recap || card.title || card.note || card.label)}&#10;Click to jump; arrow expands">
+  // A thin row has no room for the hedge line; its tooltip carries it.
+  const hedge = card.agent && !isLive(card) && !card.motion && card.saysWaits ? '&#10;says it waits — nothing running here' : '';
+  return `<article class="flight-card compact ${card.status === 'unknown' ? 'unknown-card' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.recap || card.title || card.note || card.label)}${hedge}&#10;Click to jump; arrow expands">
     ${focused ? `<div class="focus-banner"><span>You are here</span><span>focused herdr tab</span></div>` : ''}
     <div class="compact-grid">
       ${canExpand ? `<button type="button" class="expand-mini" data-expand="${esc(card.id)}" title="Expand idle card">▸</button>` : `<span class="state-lamp ${esc(card.status)}"></span>`}
@@ -1843,8 +1913,11 @@ function updateReadout() {
   const timestamp = new Date(data.generatedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const remote = data.remote?.tasks?.length ? ` / <strong>REMOTE ${esc(data.remote.tasks.join(', '))}</strong>` : '';
   const lavishTotal = data.lavish?.total ? ` / <strong class="lavish-total">◈ LAVISH ${data.lavish.total}</strong>` : '';
+  // The fact sweep is down or silently blind: no ⏳ can be trusted to be
+  // complete, and a quiet fleet must not look the same as a broken sweep.
+  const factsOff = data.facts?.offline ? ` / <strong class="facts-off" title="${esc(data.facts.reason || '')}">FACTS OFFLINE</strong>` : '';
   const readout = document.getElementById('readout');
-  readout.innerHTML = `SESSIONS ${data.cards.length} / WINDOWS ${data.windows} / UPDATED ${timestamp}${remote}${lavishTotal}`;
+  readout.innerHTML = `SESSIONS ${data.cards.length} / WINDOWS ${data.windows} / UPDATED ${timestamp}${remote}${lavishTotal}${factsOff}`;
   // If the line still has to be cut on a very narrow deck, the full text stays
   // reachable as a tooltip instead of being lost.
   readout.title = readout.textContent;
