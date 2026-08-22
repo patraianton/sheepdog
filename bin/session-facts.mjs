@@ -238,8 +238,11 @@ export async function journalFacts(file) {
   // paused: the newest assistant line is a usage-limit stop. pausedAt = when
   // it hit, resetsAt = when the limit lifts (ms, or null), autoResume = the
   // harness still promises to continue by itself at that time.
-  // lane: the newest lane launch on another host {host, task, at} or null.
-  const facts = { lastLineAt: null, pending: 0, pendingAt: null, wakeAt: null, paused: false, pausedAt: null, resetsAt: null, autoResume: false, lane: null };
+  // lane: the newest lane launch on another host {host, task, at, turnEndAt}
+  // (turnEndAt = when the launching turn ended) or null. lastTurnAt = the
+  // newest user/assistant line — the session's own activity, not the
+  // harness's bookkeeping lines.
+  const facts = { lastLineAt: null, lastTurnAt: null, pending: 0, pendingAt: null, wakeAt: null, paused: false, pausedAt: null, resetsAt: null, autoResume: false, lane: null };
   try {
     const lines = await readTail(file, s.size);
     for (const line of lines) {
@@ -249,9 +252,16 @@ export async function journalFacts(file) {
       const ts = o.timestamp ? Date.parse(o.timestamp) : NaN;
       if (!Number.isNaN(ts) && (!facts.lastLineAt || ts > facts.lastLineAt)) facts.lastLineAt = ts;
       if (o.isSidechain) continue;
+      if (o.type === 'user' || o.type === 'assistant') {
+        // A slash command's local echo (/model, /clear…) is not a turn.
+        const c = o.message?.content;
+        const localEcho = o.isMeta === true || (typeof c === 'string' && /^\s*<(?:local-command|command-name)/.test(c));
+        if (!localEcho && !Number.isNaN(ts) && (!facts.lastTurnAt || ts > facts.lastTurnAt)) facts.lastTurnAt = ts;
+      }
       if (o.type === 'system' && o.subtype === 'turn_duration') {
         facts.pending = (Number(o.pendingBackgroundAgentCount) || 0) + (Number(o.pendingWorkflowCount) || 0);
         facts.pendingAt = Number.isNaN(ts) ? null : ts;
+        if (facts.lane && facts.lane.turnEndAt == null && !Number.isNaN(ts)) facts.lane.turnEndAt = ts;
       } else if (o.type === 'system' && typeof o.content === 'string') {
         if (facts.paused && AUTO_CONTINUE.test(o.content)) facts.autoResume = true;
         else if (facts.paused && AUTO_CANCELLED.test(o.content)) facts.autoResume = false;
@@ -259,7 +269,7 @@ export async function journalFacts(file) {
         for (const b of o.message?.content ?? []) {
           if (b.type !== 'tool_use' || typeof b.input?.command !== 'string') continue;
           const m = b.input.command.match(LANE_LAUNCH);
-          if (m) facts.lane = { host: m[1], task: m[2], at: Number.isNaN(ts) ? null : ts };
+          if (m) facts.lane = { host: m[1], task: m[2], at: Number.isNaN(ts) ? null : ts, turnEndAt: null };
         }
         const t = (o.message?.content ?? []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
         // Only the harness's own error line counts: a session that merely
@@ -288,13 +298,43 @@ export async function journalFacts(file) {
 // returns the motion object for the card (or null) and the record to persist.
 // `remote` = the lane the journal says this session launched on another
 // host, checked against that host's process list: {alive, host, task, at}.
+// A lane that ENDED while the session stayed silent is the one thing nobody
+// will ever wake the session for (nohup: no notification). That is an ask on
+// the operator, returned as `laneOver` {task, host, endedAt} and persisted in
+// the record until the session's own next line. Exact when the board saw
+// the lane alive (record kind 'remote'); a fallback when it did not: the
+// launch is the newest thing in the journal and the host no longer runs it.
+function laneOverOf({ journal, prev, remote, now }) {
+  if (!remote || remote.alive) return null;
+  const lastTurnAt = journal?.lastTurnAt ?? null;
+  if (prev?.kind === 'laneOver' && prev.task === remote.task && prev.endedAt) {
+    const endedAt = Date.parse(prev.endedAt);
+    const pickedUp = lastTurnAt != null && !Number.isNaN(endedAt) && lastTurnAt > endedAt;
+    return pickedUp ? null : { task: prev.task, host: prev.host, endedAt: prev.endedAt, since: prev.since };
+  }
+  if (prev?.kind === 'remote') {
+    return { task: remote.task, host: remote.host, endedAt: new Date(remote.at ?? now).toISOString(), since: prev.since };
+  }
+  const lane = journal?.lane;
+  if (!lane || lane.task !== remote.task) return null;
+  const turnEnd = lane.turnEndAt ?? lane.at;
+  const silentSince = turnEnd != null && (lastTurnAt == null || lastTurnAt <= turnEnd + 60_000);
+  return silentSince ? { task: lane.task, host: lane.host, endedAt: null, since: new Date(lane.at ?? now).toISOString() } : null;
+}
+
 export function decideMotion({ agent, status, procs, journal, prev, now, remote }) {
-  if (!agent || status === 'working') return { motion: null, record: null, paused: false };
+  if (!agent || status === 'working') return { motion: null, record: null, paused: false, laneOver: null };
   const paused = Boolean(journal?.paused);
   const lastLineAt = journal?.lastLineAt ?? null;
   const capOk = lastLineAt != null && now - lastLineAt <= WAIT_CAP_MS;
   let m = null;
   let seenAt = now;
+  if (!paused && !(procs && procs.count > 0)) {
+    const over = laneOverOf({ journal, prev, remote, now });
+    if (over) {
+      return { motion: null, paused, laneOver: over, record: { kind: 'laneOver', task: over.task, host: over.host, endedAt: over.endedAt, since: over.since, last: new Date(now).toISOString() } };
+    }
+  }
   if (!paused) {
     if (procs && procs.count > 0) {
       m = { kind: 'proc', label: procs.label, known: procs.known, cmd: procs.cmd };
@@ -321,15 +361,15 @@ export function decideMotion({ agent, status, procs, journal, prev, now, remote 
     // ends by itself — neither is capped.
     if (m && m.kind !== 'wake' && m.kind !== 'remote' && !capOk) m = null;
   }
-  if (!m) return { motion: null, record: null, paused };
+  if (!m) return { motion: null, record: null, paused, laneOver: null };
   // One continuous wait keeps its start time across re-arms and across a
   // switch of kind (watcher -> scheduled wake-up); `last` moves only on a
   // real sighting, never during grace, so grace cannot extend itself.
-  const continuous = Boolean(prev?.since && prev?.last && now - Date.parse(prev.last) <= WAIT_GRACE_MS);
+  const continuous = Boolean(prev?.since && prev?.last && prev.kind !== 'laneOver' && now - Date.parse(prev.last) <= WAIT_GRACE_MS);
   const record = {
     since: continuous ? prev.since : new Date(now).toISOString(),
     last: m.grace ? prev.last : new Date(seenAt).toISOString(),
     kind: m.kind, label: m.label, known: m.known !== false,
   };
-  return { motion: { ...m, since: record.since }, record, paused };
+  return { motion: { ...m, since: record.since }, record, paused, laneOver: null };
 }

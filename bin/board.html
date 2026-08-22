@@ -702,6 +702,7 @@
   .system-strip.due { border-color: #6d4a28; background: #2b1c0e; color: #ffc99a; }
   .system-strip.wake { border-color: #3f5a78; background: #0f1d2c; color: #9cc4ee; }
   .system-strip.paused { border-color: #7b3c43; background: #31181c; color: #ff9da0; }
+  .system-strip.lane-over { border-color: #8a6a1f; background: #2e2612; color: #ffd166; }
   .system-strip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hedge-line {
     margin-top: 4px;
@@ -840,6 +841,7 @@
   .signal.slot-empty { visibility: hidden; }
   .signal.noagent { color: var(--unknown); }
   .signal.paused { color: #ff9da0; border-color: #7b3c43; }
+  .signal.lane-over { color: #ffd166; border-color: #8a6a1f; }
   .signal {
     min-width: 18px;
     height: 17px;
@@ -1436,7 +1438,9 @@ function shortDate(iso) {
 function roleColumnOf(card) {
   // A session parked on the harness's own usage-limit line can only be
   // resumed by the operator — that is his decision, star or no star.
-  if (card.agent && ((card.lavish ?? []).length || card.status === 'blocked' || dateDue(card) || card.paused)) return 'decisions';
+  // A lane that ended on the second machine while the session slept is an
+  // ask too: nothing will wake that session but the operator.
+  if (card.agent && ((card.lavish ?? []).length || card.status === 'blocked' || dateDue(card) || card.paused || card.laneOver)) return 'decisions';
   if (card.focus) return 'focus';
   if (card.role === 'tool') return 'tools';
   if (card.role === 'parked') return 'parked';
@@ -1508,6 +1512,19 @@ function pauseWords(card) {
   if (lifted) return `limit lifted at ${at} — nothing resumed it, bring it back by hand`;
   if (p.autoResume) return `usage limit · resumes by itself at ${at || '?'}`;
   return `usage limit${at ? ` · resets ${at}` : ''} — resume by hand or switch model`;
+}
+
+// The lane this session launched on the second machine has ended and the
+// session has not noticed — nohup never tells it. Words for the strip/chip.
+function laneOverWords(card) {
+  const l = card.laneOver || {};
+  const ended = l.endedAt ? age(l.endedAt) : '';
+  return `${l.host || 'remote'} · ${l.task || 'lane'} ended${ended ? ` ${ended} ago` : ''} — the session does not know, wake it`;
+}
+
+function laneOverStrip(card) {
+  if (!card.laneOver) return '';
+  return `<div class="system-strip lane-over" title="A codex lane launched with nohup sends no notification back; only a new prompt wakes the session"><b>⚑ LANE OVER</b><span>${esc(laneOverWords(card))}</span></div>`;
 }
 
 function pausedStrip(card) {
@@ -1672,10 +1689,11 @@ function fullCard(card, columnKey) {
         </div>
         ${controlRack(card, expanded.has(card.id))}
       </div>
-      ${alarm ? `<div class="alarm-annunciator" title="${card.paused ? 'Must not stop, but the harness stopped it on its usage limit' : 'Must not stop, but stuck'}"><span class="alarm-icon">!</span><span class="alarm-copy">Must run · ${card.paused ? 'usage limit' : 'signal idle'}</span><small>ATTN</small></div>` : ''}
+      ${alarm ? `<div class="alarm-annunciator" title="${card.paused ? 'Must not stop, but the harness stopped it on its usage limit' : 'Must not stop, but stuck'}"><span class="alarm-icon">!</span><span class="alarm-copy">Must run · ${card.paused ? 'usage limit' : card.laneOver ? 'lane over' : 'signal idle'}</span><small>ATTN</small></div>` : ''}
       ${liveStar ? `<div class="alarm-annunciator live" title="Starred and running"><span class="alarm-icon">★</span><span class="alarm-copy">Star project · running</span><small>LIVE</small></div>` : ''}
       ${waitsExternal(card) ? motionStrip(card) : ''}
       ${pausedStrip(card)}
+      ${laneOverStrip(card)}
       ${noteStrip(card)}
       ${taskLine}
       ${hedgeLine(card)}
@@ -1707,6 +1725,7 @@ function compactCard(card, options = {}) {
   const signals = [
     card.status === 'unknown' ? `<span class="signal noagent" title="No agent in this window — bring the session back">○</span>` : '',
     card.paused ? `<span class="signal paused" title="${esc(pauseWords(card))}">⛔</span>` : '',
+    card.laneOver ? `<span class="signal lane-over" title="${esc(laneOverWords(card))}">⚑</span>` : '',
     retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : '',
     card.checkDate ? `<span class="signal date" title="Check back on ${esc(card.checkDate)}">${esc(shortDate(card.checkDate))}</span>` : '',
     card.kind ? `<span class="signal kind" title="Kind: ${esc(card.kind)}">${KIND_LABEL[card.kind]}</span>` : '',
