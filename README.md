@@ -41,7 +41,11 @@ session straight from herdr and lays it out as a kanban:
   pending background workflow/agent on the session's newest turn, a
   scheduled self-wake-up (⟳ NEXT ROUND), or a codex lane the session
   launched on the second machine (`ssh <host> … codex exec … TASK-x.md` in
-  its journal) whose process is still listed there (⏳ LANE). The strip names the thing from
+  its journal) whose process is still listed there (⏳ LANE). When that lane
+  ends while the session stays silent, nothing will ever wake the session
+  (nohup sends no notice): the card moves to Decisions with a ⚑ LANE OVER
+  strip — "the session does not know, wake it" — until the session's next
+  line. The strip names the thing from
   its own command line ("CI #1101 · watching 7 min"). A vanished watcher
   gets 20 minutes to re-arm; a killed one ends the wait at once; nothing
   outlives two hours past the journal's newest line. A session that merely

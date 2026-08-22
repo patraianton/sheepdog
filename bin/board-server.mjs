@@ -676,7 +676,7 @@ async function collect() {
     const remoteLane = lane && REMOTE_HOST && lane.host === REMOTE_HOST && remoteState.ok
       ? { alive: remoteState.lines.some(l => l.includes(`${lane.task}.md`)), host: lane.host, task: lane.task, at: remoteState.checkedAt }
       : null;
-    const { motion, record, paused } = decideMotion({
+    const { motion, record, paused, laneOver } = decideMotion({
       agent: p.agent ?? null, status: p.agent_status,
       procs: facts.processesOf(p.pane_id), journal, remote: remoteLane,
       prev: waitKey ? (seen[waitKey] ?? null) : null, now: nowMs,
@@ -728,6 +728,10 @@ async function collect() {
       // will resume it but the operator. saysWaits = the recap merely SAYS it
       // waits — decoration for the grey hedge line, never a column input.
       motion,
+      // laneOver = the lane this session launched on the second machine has
+      // ended and the session has not said a word since: nothing will ever
+      // wake it (nohup), so the operator must — an ask, shown as a strip.
+      laneOver: laneOver ?? null,
       paused: Boolean(paused),
       // When the limit lifts (ISO or null) and whether the harness still
       // promises to continue by itself then (a tab sent to the background
