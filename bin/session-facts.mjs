@@ -251,7 +251,9 @@ export async function journalFacts(file) {
         else if (facts.paused && AUTO_CANCELLED.test(o.content)) facts.autoResume = false;
       } else if (o.type === 'assistant') {
         const t = (o.message?.content ?? []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
-        const limited = o.error === 'rate_limit' || o.quotaLimits?.status === 'rejected' || (Boolean(t) && RATE_LIMIT.test(t));
+        // Only the harness's own error line counts: a session that merely
+        // QUOTES the limit words (this board's own session did) is not paused.
+        const limited = o.error === 'rate_limit' || o.quotaLimits?.status === 'rejected' || (o.isApiErrorMessage === true && Boolean(t) && RATE_LIMIT.test(t));
         if (limited) {
           facts.paused = true;
           facts.pausedAt = Number.isNaN(ts) ? null : ts;
