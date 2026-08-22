@@ -219,6 +219,11 @@ async function readTail(file, size) {
 const RATE_LIMIT = /You've (?:reached|hit) your [^\n"]{0,40}limit/;
 const AUTO_CONTINUE = /continuing automatically/i;
 const AUTO_CANCELLED = /Automatic continue cancelled/i;
+// A lane launched on the second machine: the session's own shell command
+// "ssh <host> '… codex exec … TASK-<name>.md …'" (the bridge recipe). The
+// launch leaves no process here — the proof of life is the codex process
+// on that host whose command line names the same task file.
+const LANE_LAUNCH = /\bssh\s+(?:-\S+\s+\S+\s+|-\S+\s+)*([\w.-]+)\b[\s\S]*?\bcodex\s+exec\b[\s\S]*?\b(TASK-[\w.-]*?)\.md\b/;
 // Present-tense waiting words in the recap, in the languages the fleet speaks
 // — decoration only (the grey "says it waits" line), never a column input.
 // Plain \b is ASCII-only, hence the letter look-arounds.
@@ -233,7 +238,8 @@ export async function journalFacts(file) {
   // paused: the newest assistant line is a usage-limit stop. pausedAt = when
   // it hit, resetsAt = when the limit lifts (ms, or null), autoResume = the
   // harness still promises to continue by itself at that time.
-  const facts = { lastLineAt: null, pending: 0, pendingAt: null, wakeAt: null, paused: false, pausedAt: null, resetsAt: null, autoResume: false };
+  // lane: the newest lane launch on another host {host, task, at} or null.
+  const facts = { lastLineAt: null, pending: 0, pendingAt: null, wakeAt: null, paused: false, pausedAt: null, resetsAt: null, autoResume: false, lane: null };
   try {
     const lines = await readTail(file, s.size);
     for (const line of lines) {
@@ -250,6 +256,11 @@ export async function journalFacts(file) {
         if (facts.paused && AUTO_CONTINUE.test(o.content)) facts.autoResume = true;
         else if (facts.paused && AUTO_CANCELLED.test(o.content)) facts.autoResume = false;
       } else if (o.type === 'assistant') {
+        for (const b of o.message?.content ?? []) {
+          if (b.type !== 'tool_use' || typeof b.input?.command !== 'string') continue;
+          const m = b.input.command.match(LANE_LAUNCH);
+          if (m) facts.lane = { host: m[1], task: m[2], at: Number.isNaN(ts) ? null : ts };
+        }
         const t = (o.message?.content ?? []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
         // Only the harness's own error line counts: a session that merely
         // QUOTES the limit words (this board's own session did) is not paused.
@@ -275,7 +286,9 @@ export async function journalFacts(file) {
 // The decision for one card. `prev` is the last known wait of this pane (from
 // seen.json) so a watcher that blinks out of the sweep does not flicker;
 // returns the motion object for the card (or null) and the record to persist.
-export function decideMotion({ agent, status, procs, journal, prev, now }) {
+// `remote` = the lane the journal says this session launched on another
+// host, checked against that host's process list: {alive, host, task, at}.
+export function decideMotion({ agent, status, procs, journal, prev, now, remote }) {
   if (!agent || status === 'working') return { motion: null, record: null, paused: false };
   const paused = Boolean(journal?.paused);
   const lastLineAt = journal?.lastLineAt ?? null;
@@ -286,6 +299,9 @@ export function decideMotion({ agent, status, procs, journal, prev, now }) {
     if (procs && procs.count > 0) {
       m = { kind: 'proc', label: procs.label, known: procs.known, cmd: procs.cmd };
       seenAt = procs.at ?? now;
+    } else if (remote && remote.alive) {
+      m = { kind: 'remote', label: `${remote.host} · ${remote.task}`, known: true, cmd: `codex lane ${remote.task} alive on ${remote.host}` };
+      seenAt = remote.at ?? now;
     } else if (journal && journal.pending > 0 && journal.pendingAt && now - journal.pendingAt <= WAIT_CAP_MS) {
       m = { kind: 'bg', label: `${journal.pending} background ${journal.pending > 1 ? 'tasks' : 'task'}`, known: true };
     } else if (journal && journal.wakeAt && journal.wakeAt > now && journal.wakeAt - now <= WAIT_CAP_MS) {
@@ -299,7 +315,11 @@ export function decideMotion({ agent, status, procs, journal, prev, now }) {
       const silent = lastLineAt == null || lastLineAt <= lastMs;
       if (now - lastMs <= WAIT_GRACE_MS && silent) m = { kind: 'proc', label: prev.label, known: prev.known !== false, grace: true };
     }
-    if (m && m.kind !== 'wake' && !capOk) m = null;
+    // The 2 h cap guards facts that can go stale (a lingering local shell, an
+    // old counter). A scheduled wake-up carries its own time, and a codex
+    // lane alive on the other host right now is re-sighted every poll and
+    // ends by itself — neither is capped.
+    if (m && m.kind !== 'wake' && m.kind !== 'remote' && !capOk) m = null;
   }
   if (!m) return { motion: null, record: null, paused };
   // One continuous wait keeps its start time across re-arms and across a

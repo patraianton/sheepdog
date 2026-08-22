@@ -412,7 +412,10 @@ const REMOTE_FILE = path.join(STATE_DIR, 'remote-bridge.json');
 // every 20 s while the board is open; see session-facts.mjs.
 const facts = createFacts();
 const REMOTE_STALE_MS = 300_000; // every 5 minutes, and only while the board is open
-let remoteState = { checkedAt: 0, ok: false, hints: [] };
+// hints = project names read off the command lines (folder-level green
+// line); lines = the raw command lines, so a session's own lane launch
+// (journal: "ssh <host> … codex exec … TASK-x.md") can be matched by name.
+let remoteState = { checkedAt: 0, ok: false, hints: [], lines: [] };
 let remoteChecking = false;
 
 function sshRemoteProcesses() {
@@ -428,14 +431,15 @@ async function refreshRemote() {
   remoteChecking = true;
   try {
     const out = await sshRemoteProcesses();
-    if (out === null) { remoteState = { checkedAt: Date.now(), ok: false, hints: [] }; return; }
+    if (out === null) { remoteState = { checkedAt: Date.now(), ok: false, hints: [], lines: [] }; return; }
     const hints = new Set();
     // Folder names that hold project checkouts on the second machine. Defaults
     // cover common layouts; override with a "_dirs" array in remote-bridge.json.
     const dirs = (await readJsonSoft(REMOTE_FILE, {}))._dirs ?? ['Developer', 'projects', 'work', 'src'];
     const rx = new RegExp('(?:' + dirs.map(d => d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')/([\\w.-]+)', 'g');
     for (const m of out.matchAll(rx)) hints.add(m[1]);
-    remoteState = { checkedAt: Date.now(), ok: true, hints: [...hints] };
+    const lines = out.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    remoteState = { checkedAt: Date.now(), ok: true, hints: [...hints], lines };
   } finally { remoteChecking = false; }
 }
 
@@ -666,9 +670,15 @@ async function collect() {
     // seen.json housekeeping treats it like the other "~" service keys.
     const waitKey = cwd ? `${cwd}|~wait:${p.pane_id}` : null;
     const journal = journalByPane.get(p.pane_id) ?? null;
+    // The lane this session launched on the second machine (journal) is
+    // alive when that machine's process list still names its task file.
+    const lane = journal?.lane ?? null;
+    const remoteLane = lane && REMOTE_HOST && lane.host === REMOTE_HOST && remoteState.ok
+      ? { alive: remoteState.lines.some(l => l.includes(`${lane.task}.md`)), host: lane.host, task: lane.task, at: remoteState.checkedAt }
+      : null;
     const { motion, record, paused } = decideMotion({
       agent: p.agent ?? null, status: p.agent_status,
-      procs: facts.processesOf(p.pane_id), journal,
+      procs: facts.processesOf(p.pane_id), journal, remote: remoteLane,
       prev: waitKey ? (seen[waitKey] ?? null) : null, now: nowMs,
     });
     // A working turn between two watchers leaves the record alone: the wait

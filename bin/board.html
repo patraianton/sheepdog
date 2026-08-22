@@ -1483,8 +1483,9 @@ function motionStrip(card) {
   if (m.kind === 'wake') {
     return `<div class="system-strip wake" title="The session scheduled its own next round"><b>⟳ NEXT ROUND</b><span>${esc(m.label)}${tail}</span></div>`;
   }
-  const head = m.kind === 'proc' && m.known === false ? '⏳ RUNNING' : '⏳ EXTERNAL';
-  const tip = m.cmd ? `Live for this pane: ${m.cmd}` : 'A background task of this session is still pending';
+  const head = m.kind === 'remote' ? '⏳ LANE' : m.kind === 'proc' && m.known === false ? '⏳ RUNNING' : '⏳ EXTERNAL';
+  const tip = m.kind === 'remote' ? `The lane this session launched on the second machine is still running: ${m.cmd}`
+    : m.cmd ? `Live for this pane: ${m.cmd}` : 'A background task of this session is still pending';
   return `<div class="system-strip" title="${esc(tip)}"><b>${head}</b><span>${esc(m.label)}${watched ? ` · watching ${esc(watched)}` : ''}${tail}</span></div>`;
 }
 
