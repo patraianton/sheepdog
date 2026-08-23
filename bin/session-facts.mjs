@@ -10,8 +10,9 @@
 // from the session's journal had kept a dead CI wait green for 22 hours).
 //
 // Sources, all local and read-only:
-//   1. Process sweep: every shell a session spawns carries HERDR_PANE_ID and
-//      CLAUDE_PID in its environment; Git Bash can read /proc/<pid>/environ of
+//   1. Process sweep: every shell a session spawns carries HERDR_PANE_ID,
+//      CLAUDE_PID and CLAUDE_CODE_SESSION_ID (the conversation that launched
+//      it) in its environment; Git Bash can read /proc/<pid>/environ of
 //      those (MSYS) processes in one pass. Windows node cannot read /proc, hence
 //      the bash one-liner. Native Windows children (a PowerShell-tool watcher)
 //      are not in /proc and stay invisible — a known blind spot.
@@ -29,6 +30,22 @@ import { stat, open } from 'node:fs/promises';
 export const WAIT_CAP_MS = 2 * 3600_000;    // no ⏳ outlives two hours past the journal's newest line
 export const WAIT_GRACE_MS = 20 * 60_000;   // a vanished watcher may re-arm within 20 minutes of journal silence
 export const SWEEP_EVERY_MS = 20_000;
+export const STALE_WORKING_MS = 2 * 60_000; // herdr's `working` against an idle title + silent journal for this long = stale
+
+// herdr's `working` is herdr's own guess about a pane. The pane's terminal
+// title is the SESSION's own word: Claude Code writes "✳ <title>" the moment a
+// turn ends and a spinner glyph (◐ ◑ …) while one runs. A pane herdr calls
+// working whose title has carried the idle glyph while the journal stayed
+// silent for two minutes is not working. Seen 2026-08-23: a sleep loop left
+// behind by a cleared conversation kept a pane "working" in herdr for hours
+// while the session sat at its prompt — and the board in Running with it.
+// Only Claude panes: other agents title their terminals differently.
+export const IDLE_TITLE = /^\s*✳/u;
+export function staleWorking({ agent, status, title, journal, now }) {
+  if (agent !== 'claude' || status !== 'working' || !IDLE_TITLE.test(title ?? '')) return false;
+  const last = journal?.lastLineAt ?? null;
+  return last == null || now - last >= STALE_WORKING_MS;
+}
 const SWEEP_TIMEOUT_MS = 15_000;
 const SWEEP_STALE_MS = 60_000;               // a sweep older than this counts as no sweep
 const SILENT_ZERO_MS = 30 * 60_000;          // clean sweeps with zero tagged processes while sessions work -> tripwire
@@ -108,6 +125,9 @@ function evalBody(cmd) {
 // shown as plain RUNNING rather than EXTERNAL, so the strip never claims what
 // it cannot read.
 const LABELS = [
+  // A loop waiting for a local file is a wait, not an external system: named
+  // after the file, shown as plain RUNNING (known: false).
+  [/\b(?:until|while)\s+\[{1,2}\s+(?:!\s*)?-[a-z]\s+["']?([^\s"'\]]+)/, m => `file ${m[1].replace(/^.*[\\/]/, '').slice(0, 40)}`, false],
   [/\bpr checks (\d+)/, m => `CI #${m[1]}`],
   [/\bpull\/(\d+)\b/, m => `CI #${m[1]}`],
   [/\brun (?:watch|view) (\d+)/, m => `run ${m[1]}`],
@@ -122,7 +142,7 @@ const LABELS = [
 ];
 const SHELL_NOISE = /^(?:cd|export|set|until|while|for|do|done|if|then|else|fi|sleep|echo|printf|true|\(|\{|[A-Za-z_][\w]*=.*)$/;
 function labelFor(body) {
-  for (const [rx, f] of LABELS) { const m = body.match(rx); if (m) return { label: f(m), known: true }; }
+  for (const [rx, f, known = true] of LABELS) { const m = body.match(rx); if (m) return { label: f(m), known }; }
   const word = body.split(/[\s;&|()]+/).map(t => t.replace(/^["']+|["']+$/g, '')).find(t => t && !SHELL_NOISE.test(t)) || 'background task';
   return { label: word.replace(/^.*[\\/]/, '').slice(0, 24), known: false };
 }
@@ -180,10 +200,14 @@ export function createFacts() {
   // Processes of one pane, summarised: how many distinct waits (task shells,
   // or root processes when no shell is visible), a label, and WHEN this was
   // seen — the sweep's time, not the poll's.
-  function processesOf(pane) {
-    if (!state.ok || Date.now() - state.checkedAt > SWEEP_STALE_MS) return null;
-    const list = state.byPane.get(pane);
-    if (!list || !list.length) return { count: 0, at: state.checkedAt };
+  // A task shell carries the CONVERSATION that launched it (its
+  // CLAUDE_CODE_SESSION_ID). After /clear the process lives on with a new
+  // conversation, and a watcher from the cleared one keeps running — nobody
+  // in the current conversation waits for it, and its finish would land as
+  // noise. Given the pane's current conversation `sid`, those shells are not
+  // this session's motion: they come back separately as `stray`, for a grey
+  // line, never for the strip.
+  function summarise(list) {
     const shells = list.filter(p => p.body);
     const pids = new Set(list.map(p => p.mpid));
     const roots = list.filter(p => !pids.has(p.ppid));
@@ -191,7 +215,17 @@ export function createFacts() {
     const main = picked[0];
     const { label, known } = labelFor(main.body ?? main.cmd);
     const count = picked.length;
-    return { count, label: count > 1 ? `${label} +${count - 1}` : label, known, cmd: (main.body ?? main.cmd).slice(0, 300), at: state.checkedAt };
+    return { count, label: count > 1 ? `${label} +${count - 1}` : label, known, cmd: (main.body ?? main.cmd).slice(0, 300) };
+  }
+  function processesOf(pane, sid) {
+    if (!state.ok || Date.now() - state.checkedAt > SWEEP_STALE_MS) return null;
+    const list = state.byPane.get(pane);
+    if (!list || !list.length) return { count: 0, at: state.checkedAt, stray: null };
+    const own = sid ? list.filter(p => !p.sid || p.sid === sid) : list;
+    const strays = sid ? list.filter(p => p.sid && p.sid !== sid) : [];
+    const stray = strays.length ? summarise(strays) : null;
+    if (!own.length) return { count: 0, at: state.checkedAt, stray };
+    return { ...summarise(own), at: state.checkedAt, stray };
   }
 
   return { sweep, health, processesOf, checkedAt: () => state.checkedAt };
