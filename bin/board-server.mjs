@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process';
 import { readFile, writeFile, rename, mkdir, stat, open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createFacts, journalFacts, decideMotion, SAYS_WAITS } from './session-facts.mjs';
+import { createFacts, journalFacts, decideMotion, staleWorking, SAYS_WAITS } from './session-facts.mjs';
 
 const PORT = 4877;
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -588,7 +588,15 @@ async function collect() {
   const snap = snapRes?.result?.snapshot ?? {};
   const wsById = new Map((snap.workspaces ?? []).map(w => [w.workspace_id, w]));
   const tabById = new Map((snap.tabs ?? []).map(t => [t.tab_id, t]));
-  const panes = snap.panes ?? [];
+  // herdr's `working` is checked against the session's own word before
+  // anything reads it (column, pulse, motion): a pane whose terminal title
+  // carries Claude Code's idle glyph while its journal stays silent is idle,
+  // whatever herdr says — see staleWorking in session-facts.mjs.
+  const sidByPane = new Map(agentList.filter(a => a.pane_id && a.agent_session?.value).map(a => [a.pane_id, a.agent_session.value]));
+  const staleByPane = new Set(agentList
+    .filter(a => a.pane_id && staleWorking({ agent: a.agent, status: a.agent_status, title: a.terminal_title, journal: journalByPane.get(a.pane_id) ?? null, now: Date.parse(now) }))
+    .map(a => a.pane_id));
+  const panes = (snap.panes ?? []).map(p => staleByPane.has(p.pane_id) ? { ...p, agent_status: 'idle', stale_working: true } : p);
 
   // After a restart herdr restores every window but no agent is attached yet
   // (agent_status "unknown"). Those windows are still cards — the fleet must
@@ -676,9 +684,10 @@ async function collect() {
     const remoteLane = lane && REMOTE_HOST && lane.host === REMOTE_HOST && remoteState.ok
       ? { alive: remoteState.lines.some(l => l.includes(`${lane.task}.md`)), host: lane.host, task: lane.task, at: remoteState.checkedAt }
       : null;
+    const procs = facts.processesOf(p.pane_id, sidByPane.get(p.pane_id) ?? null);
     const { motion, record, paused, laneOver } = decideMotion({
       agent: p.agent ?? null, status: p.agent_status,
-      procs: facts.processesOf(p.pane_id), journal, remote: remoteLane,
+      procs, journal, remote: remoteLane,
       prev: waitKey ? (seen[waitKey] ?? null) : null, now: nowMs,
     });
     // A working turn between two watchers leaves the record alone: the wait
@@ -742,6 +751,12 @@ async function collect() {
         autoResume: Boolean(journal?.autoResume),
       } : null,
       saysWaits: Boolean(recapText && SAYS_WAITS.test(recapText)),
+      // staleWorking = herdr still says working, but the session's own title
+      // and journal say idle (status above is already corrected to idle).
+      // strayTask = a task shell of this pane launched by a CLEARED
+      // conversation still runs — a fact worth a grey line, never motion.
+      staleWorking: p.stale_working === true,
+      strayTask: procs?.stray ? { label: procs.stray.label, cmd: procs.stray.cmd } : null,
       lastLineAt: journal?.lastLineAt ? new Date(journal.lastLineAt).toISOString() : null,
       agent: p.agent ?? null,
       since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,

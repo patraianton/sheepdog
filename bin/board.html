@@ -1497,9 +1497,17 @@ function motionStrip(card) {
 // runs for it — shown instead of a green strip, with the age of its last word,
 // so a card that left Running is an explained event, not a mystery.
 function hedgeLine(card) {
-  if (!card.agent || isLive(card) || card.motion || !card.saysWaits) return '';
+  if (!card.agent || isLive(card) || card.motion) return '';
   const last = age(card.lastLineAt);
-  return `<div class="hedge-line" title="No live watcher, no pending task, no scheduled wake-up for this session">says it waits — nothing running here${last ? ` · last word ${esc(last)} ago` : ''}</div>`;
+  const lines = [];
+  // herdr's `working` overruled by the session's own idle title and silent
+  // journal (server-side, 2026-08-23): the card left Running for a reason.
+  if (card.staleWorking) lines.push(`<div class="hedge-line" title="herdr reports working, but the session's terminal title carries the idle glyph and its journal is silent">herdr says working — the session itself is idle${last ? ` · last word ${esc(last)} ago` : ''}</div>`);
+  // A task shell launched by a cleared conversation still runs in this pane —
+  // shown, never counted as motion (nobody here waits for it).
+  if (card.strayTask) lines.push(`<div class="hedge-line" title="${esc(card.strayTask.cmd || '')}">a task from a cleared conversation still runs here · ${esc(card.strayTask.label)}</div>`);
+  if (card.saysWaits) lines.push(`<div class="hedge-line" title="No live watcher, no pending task, no scheduled wake-up for this session">says it waits — nothing running here${last ? ` · last word ${esc(last)} ago` : ''}</div>`);
+  return lines.join('');
 }
 
 // Usage-limit words for the strip and the chip: when the limit lifts, and
