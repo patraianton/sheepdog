@@ -6,27 +6,43 @@ A live kanban board that herds your coding-agent fleet.
 
 sheepdog is a local web board for people who run many parallel coding-agent
 sessions inside [herdr](https://herdr.dev). It reads the live state of every
-session straight from herdr and lays it out as a kanban:
+session straight from herdr, and lets you *assign* what the fleet does
+rather than just watch it. The morning question it answers: which of these
+forty windows do I sit down with today, and is everything else fine?
 
 - **Card = session.** One open agent session, one card. Nothing is merged or
   entered by hand — herdr is the source of truth.
-- **Columns = what to do with it, not what the agent said.** *Decisions* (an
-  open review page, a blocked session or an arrived check-back date — always
-  first; a review page counts only while it is the session's last word — once
-  the session works past it, the page is history, not a blocker; a starred
-  card with no live agent alarms here too — restarting it is your call), *Focus* (the cards you picked for deep work), *Running* (only what
-  actually runs: live sessions on top — starred first, with a green LIVE
-  highlight — and cron work resting between wakeups), *Tools* (maintenance,
-  thin rows, never alarms), *Parked*
-  (consciously paused or simply stopped — a "runs" role without a live
-  agent waits here until brought back). The raw herdr state stays on every
-  card as a lamp. In every column whatever is running right now floats to
-  the top. Cards move by themselves; you never drag them.
-- **Deep focus.** A header toggle that hides everything except the cards you
-  picked with ◎ — star alarms included. The pick survives reloads.
+- **Lanes are filed by hand, never inferred.** You file each window into
+  one of three lanes, and a card never moves by itself:
+  *Focus — today* (the few windows you work with today; full cards, each
+  carrying the task it was launched on), *Ongoing* (built, runs, watched:
+  thin quiet rows that open up only when something is on you), *Tools*
+  (fix-it windows; an alphabetical jump list, never an alarm). Everything
+  unfiled sits in *Unsorted* until you file it — filing is the only thing an
+  unsorted window asks of you. The raw herdr state stays on every card as
+  a lamp.
+- **"On you" is the one verdict the board raises itself.** A card gets a
+  ◆ ON YOU strip with its reason when nothing but you can move it — and
+  what counts depends on the lane: a focus window that stopped ("next step
+  is yours", or "no task launched yet"), a focus window with no agent, a
+  blocked session, an open review page, an arrived check-back date, a
+  usage-limit stop, a lane that ended on the second machine, a starred
+  ongoing window gone silent. Alarms (something that must run does not)
+  are red; asks are magenta. A header toggle shows only the on-you cards,
+  in their lanes; its counter is the number to look at in the morning.
+- **The dispatcher's brief.** `GET /brief` (or `node bin\dispatch.mjs brief`)
+  prints the whole fleet as one page of plain text — on-you first, then
+  focus with each window's task and last words, ongoing, tools, unsorted —
+  so the agent sitting next to you reads one page instead of forty
+  windows. `dispatch type <window> focus|ongoing|tool|none` files a window;
+  `dispatch launch <window> "<task>"` records the task on the card and
+  sends it into the session (`herdr agent prompt`; only from inside a herdr
+  pane, only on your word — `--record-only` skips the send); `note`, `done`
+  and `clear` keep the card's plan honest. The plan lives in
+  `state/plan.json`, one entry per folder.
 - **Check-back dates.** A card can carry "check on DD.MM" (presets +3 d /
-  +1 week / +2 weeks). Until the date it waits as a thin Parked row; on the
-  day it surfaces in Decisions by itself.
+  +1 week / +2 weeks). On the day the card says so — on a focus or ongoing
+  window as its on-you reason, on any other as its own strip.
 - **Recap line on live cards.** A small local model (any OpenAI-compatible
   server; set `SHEEPDOG_RECAP_URL` / `SHEEPDOG_RECAP_MODEL`, default LM
   Studio at `127.0.0.1:1234`) summarizes each live session's journal tail
@@ -43,17 +59,15 @@ session straight from herdr and lays it out as a kanban:
   launched on the second machine (`ssh <host> … codex exec … TASK-x.md` in
   its journal) whose process is still listed there (⏳ LANE). When that lane
   ends while the session stays silent, nothing will ever wake the session
-  (nohup sends no notice): the card moves to Decisions with a ⚑ LANE OVER
-  strip — "the session does not know, wake it" — until the session's next
-  line. The strip names the thing from
+  (nohup sends no notice): the card gets a ⚑ LANE OVER strip — "the
+  session does not know, wake it" — until the session's next line. The strip names the thing from
   its own command line ("CI #1101 · watching 7 min"). A vanished watcher
   gets 20 minutes to re-arm; a killed one ends the wait at once; nothing
   outlives two hours past the journal's newest line. A session that merely
   *says* it waits gets a grey hedge line instead of a green strip. If the
   sweep is down the header says FACTS OFFLINE. A session the harness
   stopped on its usage limit shows a ⛔ USAGE LIMIT strip — when the limit
-  lifts and whether the session will continue by itself — and lands in
-  Decisions; a starred one alarms "Must run · usage limit".
+  lifts and whether the session will continue by itself.
 - **Refreshes every 3 seconds.** The "stuck for N h" timer shows how long a
   card has been sitting in its current state.
 - **Click a card to jump there.** The board focuses that herdr tab; the tab
@@ -69,14 +83,12 @@ session straight from herdr and lays it out as a kanban:
   checkout its repo (`REPO /`). An auto-named worktree window is titled by
   the branch checked out in it — the branch is the work; renaming the window
   by hand overrides that.
-- **The only manual input** is what herdr cannot know: priority (P1/P2/P3),
-  a life-direction tag for color-coding, a "must not stop" star (the card
-  turns red if a starred session goes quiet), a kind — temporary (⏱),
-  ongoing (∞) or cron-driven (↻, work happens on a schedule so an idle
-  session is fine) — a role (runs / tool / parked, or auto), a deep-focus
-  pick (◎), a check-back date and a short note. All of it is set by clicking
-  on the card and stored in `state/projects.json`, keyed by the session's
-  working directory.
+- **The only manual input** is what herdr cannot know: the lane (◎ focus /
+  ∞ ongoing / ✚ tool / · unsorted), priority (P1/P2/P3), a life-direction
+  tag for color-coding, a "must not stop" star (an ongoing window that goes
+  quiet with a star on it alarms), a check-back date and a short note. All
+  of it is set by clicking on the card and stored in `state/projects.json`,
+  keyed by the session's working directory.
 - **Power button on a card** (⏻, asks "sure?") tells the session to save
   everything important to the project's memory and commit, waits for it to
   finish, logs the window to `state/closed.jsonl`, then closes it. If the

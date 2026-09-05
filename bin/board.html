@@ -139,21 +139,13 @@
     font-size: 10px;
     text-align: center;
   }
+  /* The "on you" filter toggle sits with the view tabs, in the on-you magenta. */
   .view-tab.deep-toggle { border-left: 1px solid var(--line); }
   .view-tab.deep-toggle.on {
-    color: var(--focus);
-    background: linear-gradient(180deg, #143444, #0e2431);
-    box-shadow: inset 0 3px 0 var(--focus);
+    color: #f2a7e3;
+    background: linear-gradient(180deg, #3a1a3f, #241026);
+    box-shadow: inset 0 3px 0 #f2a7e3;
   }
-
-  /* Deep focus: a flat grid of only the picked cards. */
-  .focus-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 8px;
-    padding: 8px;
-  }
-  .focus-empty { padding: 30px 16px; color: var(--ink-dim); font-size: 12px; }
 
   #readout-zone {
     grid-area: readout;
@@ -344,6 +336,18 @@
     scrollbar-width: thin;
     scrollbar-color: #2f4356 transparent;
   }
+  /* An empty lane says what would fill it — the empty Focus lane is the
+     morning's cue, not dead space. */
+  .lane-empty {
+    margin: 4px 2px;
+    padding: 12px 10px;
+    border: 1px dashed #2f4356;
+    color: #6b7a8a;
+    font-family: var(--telemetry);
+    font-size: 9px;
+    letter-spacing: .04em;
+    line-height: 1.5;
+  }
 
   .flight-card {
     --state: var(--unknown);
@@ -498,13 +502,9 @@
   .control.p1 { color: #ff8d8f; border-color: #744347; background: #28171b; }
   .control.p2 { color: #ffc878; border-color: #6c5936; }
   .control.p3 { color: #aebdca; }
-  .control.kind-temp { color: #79d9ef; }
-  .control.kind-cron { color: #efc06a; }
-  .control.kind-ongoing { color: #b9a8ec; }
-  .control.role-run { color: #35d6a0; border-color: #2c6a55; }
-  .control.role-tool { color: #f5c744; border-color: #6c5936; }
-  .control.role-parked { color: #8fa3b6; }
-  .control.focuspick-on { color: #07121a; background: var(--focus); border-color: var(--focus); }
+  .control.type-focus { color: #07121a; background: var(--focus); border-color: var(--focus); }
+  .control.type-ongoing { color: #35d6a0; border-color: #2c6a55; }
+  .control.type-tool { color: #f5c744; border-color: #6c5936; }
   .control.date-set { color: #e08e45; border-color: #6d4a28; }
   .control.expand-control { cursor: pointer; color: var(--focus); }
   .control.confirm {
@@ -703,6 +703,15 @@
   .system-strip.wake { border-color: #3f5a78; background: #0f1d2c; color: #9cc4ee; }
   .system-strip.paused { border-color: #7b3c43; background: #31181c; color: #ff9da0; }
   .system-strip.lane-over { border-color: #8a6a1f; background: #2e2612; color: #ffd166; }
+  /* On you: the one verdict the board raises itself. "ask" = a session waits
+     for the operator's word (magenta, calm); "alarm" = something that must
+     run does not (red). */
+  .system-strip.onyou { border-color: #86407c; background: #2b1230; color: #f2a7e3; }
+  .system-strip.onyou.alarm { border-color: #7b3c43; background: #31181c; color: #ff9da0; }
+  /* The plan line on a focus card: what it was launched on and when. */
+  .system-strip.plan { border-color: #3d5a45; background: #0f2015; color: #b9e8c6; }
+  .system-strip.plan.done { border-color: #3a4a55; background: #111a22; color: #8fa3b6; }
+  .system-strip.plan.empty { border-style: dashed; border-color: #34434f; background: transparent; color: #6b7a8a; }
   .system-strip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hedge-line {
     margin-top: 4px;
@@ -856,7 +865,8 @@
   }
   .signal.note { color: var(--note); border-color: #66582f; }
   .signal.star { color: var(--note); }
-  .signal.kind { color: #79d9ef; }
+  .signal.onyou { color: #f2a7e3; border-color: #86407c; }
+  .signal.onyou.alarm { color: #ff9da0; border-color: #7b3c43; }
   .signal.date { color: #e08e45; border-color: #6d4a28; }
   .signal.retiring { color: var(--violet); border-color: #5b4c78; }
   .signal.lavish { color: #f2a7e3; border-color: #86407c; cursor: pointer; }
@@ -1330,21 +1340,25 @@ const STATE = {
 };
 // Mine columns are roles ("what do I do with this"), not herdr states.
 // The herdr state stays on every card as its lamp.
+// Mine lanes are filed by hand (type); the herdr state stays a lamp.
 const COLDEF = {
-  decisions: { color: '#f2a7e3', glyph: '◆', code: 'ON YOU' },
-  focus:     { color: 'var(--focus)', glyph: '◎', code: 'DEEP WORK' },
-  running:   { color: 'var(--working)', glyph: '▶', code: 'LIVE' },
-  tools:     { color: '#f5c744', glyph: '✚', code: 'MAINT' },
-  parked:    { color: 'var(--idle)', glyph: 'Ⅱ', code: 'STANDBY' },
+  focus:    { color: 'var(--focus)', glyph: '◎', code: 'TODAY' },
+  ongoing:  { color: '#35d6a0', glyph: '∞', code: 'RUNS' },
+  tools:    { color: '#f5c744', glyph: '✚', code: 'QUICK JUMP' },
+  unsorted: { color: 'var(--idle)', glyph: '·', code: 'FILE ME' },
+};
+const LANE_EMPTY = {
+  focus: 'Nothing filed for today. Sit down with the dispatcher (dispatch brief), pick the few windows that matter, mark them ◎ — each gets a task launched on it.',
+  ongoing: 'No ongoing work filed — mark windows that run by themselves ∞; they rest here quietly and call you only when stuck.',
+  tools: 'No tools filed — mark fix-it windows ✚ for a one-click jump.',
+  unsorted: 'Everything is filed.',
 };
 const PRIO_NEXT = { P1: 'P2', P2: 'P3', P3: 'P1', '': 'P1' };
 const PRIO_RANK = { P1: 0, P2: 1, P3: 2 };
-const KIND_NEXT = { '': 'temp', temp: 'ongoing', ongoing: 'cron', cron: '' };
-const ROLE_NEXT = { '': 'run', run: 'tool', tool: 'parked', parked: '' };
-const ROLE_GLYPH = { run: '▶', tool: '✚', parked: 'Ⅱ' };
 // Glyphs must exist in the monospace stack, otherwise the browser substitutes
 // a colour emoji at the wrong size (⏱ came out as a blue smudge).
-const KIND_LABEL = { temp: '⧗', ongoing: '∞', cron: '↻' };
+const TYPE_NEXT = { '': 'focus', focus: 'ongoing', ongoing: 'tool', tool: '' };
+const TYPE_GLYPH = { focus: '◎', ongoing: '∞', tool: '✚' };
 const VIEWS = ['mine', 'team', 'other'];
 const VIEW_LABELS = { mine: 'Mine', team: 'Team', other: 'Other' };
 const PULSE_MS = 15 * 60 * 1000;
@@ -1355,17 +1369,9 @@ const query = new URLSearchParams(location.search);
 let filter = localStorage.getItem('board-filter') || '';
 let view = query.get('view') || localStorage.getItem('board-view') || 'mine';
 if (!VIEWS.includes(view)) view = 'mine';
-// Deep focus: only the ◎-picked cards, everything else silenced. The pick
-// itself lives in projects.json (survives reloads); the mode is per-browser.
-// An explicit ?deep=1/0 wins once and is then consumed from the address bar,
-// so later reloads answer to localStorage (and the toggle) alone.
-const deepParam = query.get('deep');
-let deepFocus = deepParam !== null ? deepParam === '1' : localStorage.getItem('board-deep') === '1';
-if (deepParam !== null) {
-  localStorage.setItem('board-deep', deepFocus ? '1' : '');
-  query.delete('deep');
-  history.replaceState(null, '', location.pathname + ([...query].length ? '?' + query.toString() : ''));
-}
+// "On you" filter: only the cards waiting for the operator, in their lanes.
+// Per-browser, like the direction filter.
+let onlyOnYou = localStorage.getItem('board-onyou') === '1';
 let lastFocusedTab = null;
 let pageVersion = null;
 let pendingOff = null;
@@ -1408,15 +1414,13 @@ function isLive(card) {
   return card.status === 'working' || Boolean(card.remote);
 }
 
-// Column order (operator's rules, 2026-08-20): everything RUNNING right now
-// floats to the top — the live starred card above all, then other live
-// cards; among the stalled, alarming stars first, quiet stars next, the
-// rest last. This is how a starred card tops Standby without leaving it.
+// Order inside a lane: what needs the operator first (alarms above asks),
+// then what runs right now, then work in motion elsewhere, then the rest.
 function activityRank(card) {
-  if (isLive(card)) return card.star ? 0 : 1;
-  if (waitsExternal(card)) return card.star ? 2 : 3;
-  if (card.star) return isAlarm(card) ? 4 : 5;
-  return 6;
+  if (card.onYou) return card.onYou.level === 'alarm' ? 0 : 1;
+  if (isLive(card)) return 2;
+  if (waitsExternal(card)) return 3;
+  return 4;
 }
 
 function localDate(ms) {
@@ -1430,39 +1434,25 @@ function shortDate(iso) {
   return iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : '';
 }
 
-// Decisions hold only LIVE sessions that are asking the operator something:
-// blocked, holding a review page, an arrived check-back date, or starred and
-// waiting for his word. A window whose session is not even loaded asks
-// nothing (operator, 2026-08-21) — no page, date or star changes that: it
-// parks in Standby with all its signals still visible on the card.
-function roleColumnOf(card) {
-  // A session parked on the harness's own usage-limit line can only be
-  // resumed by the operator — that is his decision, star or no star.
-  // A lane that ended on the second machine while the session slept is an
-  // ask too: nothing will wake that session but the operator.
-  if (card.agent && ((card.lavish ?? []).length || card.status === 'blocked' || dateDue(card) || card.paused || card.laneOver)) return 'decisions';
-  if (card.focus) return 'focus';
-  if (card.role === 'tool') return 'tools';
-  if (card.role === 'parked') return 'parked';
-  // Running holds work in motion: live sessions, cron work (idle between
-  // wakeups is normal), and sessions whose work an external system is
-  // running right now — CI, a queue, the Mac (operator, 2026-08-21: "waits
-  // on CI" is neither his decision nor a parked project). A starred session
-  // waiting for the operator's word goes to Decisions. A starred window
-  // with no agent parks in Standby at the top with its MUST RUN alarm;
-  // unstarred stalled cards just park.
-  if (isLive(card) || card.kind === 'cron' || waitsExternal(card)) return 'running';
-  if (card.star && card.agent) return 'decisions';
-  return 'parked';
+// The lane is the operator's filing, nothing else: a card never moves by
+// itself (operator's rewrite, 2026-09-05 — "the board assigns what is
+// done, it does not watch what happens"). What the machine sees is said ON
+// the card: the on-you strip, the live banner, the motion strip.
+function laneOf(card) {
+  if (card.type === 'focus') return 'focus';
+  if (card.type === 'ongoing') return 'ongoing';
+  if (card.type === 'tool') return 'tools';
+  return 'unsorted';
 }
 
-// Which columns show a card as a thin row: Tools, Parked and Running while
-// the process rests. Anything alive right now — working, remote, pulsing,
-// finished-unseen (done) or alarming — keeps the full card, so its herdr
-// lamp stays visible whatever column the role put it in.
+// Which lanes show a card as a thin row. Focus cards are always full — they
+// are the day. Ongoing rows stay thin while the process rests and open up
+// when something is on the operator or runs right now. Tools are a jump
+// list: thin, always. Unsorted rows are thin; filing them is the only call.
 function thinCard(card, columnKey) {
-  if (columnKey !== 'tools' && columnKey !== 'parked' && columnKey !== 'running') return false;
-  return !(card.status === 'working' || card.status === 'done' || card.remote || hasPulse(card) || waitsExternal(card) || isAlarm(card));
+  if (columnKey === 'focus') return false;
+  if (columnKey === 'tools' || columnKey === 'unsorted') return true;
+  return !(card.onYou || card.status === 'working' || card.status === 'done' || card.remote || waitsExternal(card));
 }
 
 // Waiting on an external system (CI, a queue, another machine) is work in
@@ -1541,11 +1531,29 @@ function pausedStrip(card) {
   return `<div class="system-strip paused" title="The harness stopped this session on its usage limit${since ? ` ${esc(since)} ago` : ''}"><b>⛔ USAGE LIMIT</b><span>${esc(pauseWords(card))}</span></div>`;
 }
 
+// The red alarm is the server's "alarm"-level on-you verdict: something that
+// must run (a starred ongoing window, any focus window) does not.
 function isAlarm(card) {
-  // A star alarms only when nothing moves at all: the session is not
-  // working, no Mac twin, no external system running for it, and even the
-  // pulse has gone stale.
-  return Boolean(card.star && !isLive(card) && !waitsExternal(card) && !hasPulse(card));
+  return card.onYou?.level === 'alarm';
+}
+
+// The on-you strip: the reason the board raised the card, in its words.
+function onYouStrip(card) {
+  if (!card.onYou) return '';
+  const alarm = card.onYou.level === 'alarm';
+  return `<div class="system-strip onyou ${alarm ? 'alarm' : ''}" title="Only you can move this card now"><b>${alarm ? '! ON YOU' : '◆ ON YOU'}</b><span>${esc(card.onYou.reason)}</span></div>`;
+}
+
+// The plan line of a focus card: the task the window was launched on, when,
+// and whether it is done. An empty one is the sit-down's cue to launch.
+function planStrip(card) {
+  if (card.type !== 'focus') return '';
+  const p = card.plan;
+  if (!p?.task) return `<div class="system-strip plan empty" title="Nothing launched here yet — the morning sit-down decides what"><b>◎ PLAN</b><span>no task launched yet</span></div>`;
+  const when = age(p.launchedAt);
+  const done = p.status === 'done';
+  const last = (p.log ?? []).slice(-1)[0];
+  return `<div class="system-strip plan ${done ? 'done' : ''}" title="${esc(p.task)}${last ? `&#10;log: ${esc(last.text)}` : ''}"><b>${done ? '✓ DONE' : '◎ PLAN'}</b><span>${esc(p.task)}${when ? ` · ${done ? 'launched' : 'launched'} ${esc(when)} ago` : ''}</span></div>`;
 }
 
 // Two names say the same thing when one is contained in the other — the
@@ -1606,16 +1614,9 @@ function prioControl(card, extraClass) {
   return `<button type="button" class="control prio-control ${String(card.prio || '').toLowerCase()} ${card.prio ? '' : 'unset'} ${extraClass || ''}" data-cwd="${esc(card.cwd)}" data-prio="${esc(card.prio || '')}" title="Click to change priority">${esc(card.prio || '·')}</button>`;
 }
 
-function kindControl(card) {
-  return `<button type="button" class="control kind-control ${card.kind ? `kind-${esc(card.kind)}` : 'unset'}" data-cwd="${esc(card.cwd)}" data-kind="${esc(card.kind || '')}" title="Kind: temporary (⧗), ongoing (∞) or cron-driven (↻)">${KIND_LABEL[card.kind] || '·'}</button>`;
-}
-
-function roleControl(card) {
-  return `<button type="button" class="control role-control ${card.role ? `role-${esc(card.role)}` : 'unset'}" data-cwd="${esc(card.cwd)}" data-role="${esc(card.role || '')}" title="Role: runs (▶), tool (✚), parked (Ⅱ) or auto (·)">${ROLE_GLYPH[card.role] || '·'}</button>`;
-}
-
-function focusPickControl(card) {
-  return `<button type="button" class="control focuspick-control ${card.focus ? 'focuspick-on' : 'unset'}" data-cwd="${esc(card.cwd)}" data-focus="${card.focus ? '1' : ''}" title="Deep-focus pick: this card stays visible in focus mode">◎</button>`;
+// The lane picker: focus (◎) → ongoing (∞) → tool (✚) → unsorted (·).
+function typeControl(card) {
+  return `<button type="button" class="control type-control ${card.type ? `type-${esc(card.type)}` : 'unset'}" data-cwd="${esc(card.cwd)}" data-type="${esc(card.type || '')}" title="Lane: focus (◎) → ongoing (∞) → tool (✚) → unsorted (·)">${TYPE_GLYPH[card.type] || '·'}</button>`;
 }
 
 function dateControl(card) {
@@ -1643,7 +1644,7 @@ function controlRack(card, allowCollapse) {
     ? `<button type="button" class="control expand-control" data-expand="${esc(card.id)}" title="Collapse to a thin row">▴</button>`
     : '';
   if (!card.cwd) return `<div class="control-rack">${collapse}${power}${focusControl()}</div>`;
-  return `<div class="control-rack">${collapse}${focusPickControl(card)}${starControl(card)}${kindControl(card)}${roleControl(card)}${prioControl(card)}${dateControl(card)}${noteControl(card)}${power}</div>`;
+  return `<div class="control-rack">${collapse}${typeControl(card)}${starControl(card)}${prioControl(card)}${dateControl(card)}${noteControl(card)}${power}</div>`;
 }
 
 function fullCard(card, columnKey) {
@@ -1651,13 +1652,12 @@ function fullCard(card, columnKey) {
   const ageClass = card.status === 'blocked' || card.status === 'done'
     ? (displayedAge && displayedAge.includes('d') && !displayedAge.includes('min') ? 'vhot' : 'hot')
     : '';
-  // Deep focus silences every alarm — his explicit call.
-  const alarm = !deepFocus && isAlarm(card);
+  const alarm = isAlarm(card);
   // The healthy mirror of the alarm: a starred card that IS running gets the
   // same weight of highlight, in green — never mutually true with the alarm.
   // Only a card running RIGHT NOW earns the green banner — a fresh pulse on
   // an idle card does not (operator, 2026-08-20).
-  const liveStar = Boolean(card.star && !isAlarm(card) && isLive(card));
+  const liveStar = Boolean(card.star && !alarm && isLive(card));
   const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
   const retire = data.retire?.[card.tabId];
   const aff = affiliation(card);
@@ -1670,7 +1670,9 @@ function fullCard(card, columnKey) {
   const retireLine = retire
     ? `<div class="system-strip retire ${retire.error ? 'error' : ''}"><b>⏻ RETIRE</b><span title="${esc(retire.error || retire.phase)}">${esc(retire.error || retire.phase)}</span></div>`
     : '';
-  const dueLine = dateDue(card)
+  // The arrived check date is the on-you reason on focus/ongoing cards; a
+  // tool or unsorted card still shows it as its own strip.
+  const dueLine = dateDue(card) && !card.onYou
     ? `<div class="system-strip due"><b>⧖ CHECK DUE</b><span>check-back date ${esc(shortDate(card.checkDate))} has arrived</span></div>`
     : '';
   const lavishLines = (card.lavish ?? []).map(a =>
@@ -1697,8 +1699,9 @@ function fullCard(card, columnKey) {
         </div>
         ${controlRack(card, expanded.has(card.id))}
       </div>
-      ${alarm ? `<div class="alarm-annunciator" title="${card.paused ? 'Must not stop, but the harness stopped it on its usage limit' : 'Must not stop, but stuck'}"><span class="alarm-icon">!</span><span class="alarm-copy">Must run · ${card.paused ? 'usage limit' : card.laneOver ? 'lane over' : 'signal idle'}</span><small>ATTN</small></div>` : ''}
       ${liveStar ? `<div class="alarm-annunciator live" title="Starred and running"><span class="alarm-icon">★</span><span class="alarm-copy">Star project · running</span><small>LIVE</small></div>` : ''}
+      ${onYouStrip(card)}
+      ${planStrip(card)}
       ${waitsExternal(card) ? motionStrip(card) : ''}
       ${pausedStrip(card)}
       ${laneOverStrip(card)}
@@ -1736,16 +1739,16 @@ function compactCard(card, options = {}) {
     card.laneOver ? `<span class="signal lane-over" title="${esc(laneOverWords(card))}">⚑</span>` : '',
     retire ? `<span class="signal retiring" title="${esc(retire.error || retire.phase)}">⏻</span>` : '',
     card.checkDate ? `<span class="signal date" title="Check back on ${esc(card.checkDate)}">${esc(shortDate(card.checkDate))}</span>` : '',
-    card.kind ? `<span class="signal kind" title="Kind: ${esc(card.kind)}">${KIND_LABEL[card.kind]}</span>` : '',
+    card.onYou ? `<span class="signal onyou ${card.onYou.level === 'alarm' ? 'alarm' : ''}" title="On you: ${esc(card.onYou.reason)}">◆</span>` : '',
     card.note ? `<span class="signal note" title="${esc(card.note)}">⚑</span>` : '<span class="signal slot-empty"></span>',
     card.star ? `<span class="signal star" title="Must not stop">★</span>` : '<span class="signal slot-empty"></span>',
     card.prio ? `<span class="signal ${String(card.prio).toLowerCase()}">${esc(card.prio)}</span>` : '<span class="signal slot-empty"></span>'
   ].join('');
-  // Role, ◎ and the check-back date only surface on the Mine kanban — a team
+  // The lane and the check-back date only surface on the Mine kanban — a team
   // row offering them would store state no view ever shows.
   const mine = viewOf(card) === 'mine';
   const actions = (card.cwd
-    ? (mine ? focusPickControl(card) : '') + starControl(card) + (mine ? roleControl(card) : '') + prioControl(card) + (mine ? dateControl(card) : '') + (mine ? noteControl(card) : '')
+    ? (mine ? typeControl(card) : '') + starControl(card) + prioControl(card) + (mine ? dateControl(card) : '') + (mine ? noteControl(card) : '')
     : '') + powerControl(card) + focusControl();
   // A thin row has no room for the hedge line; its tooltip carries it.
   const hedge = card.agent && !isLive(card) && !card.motion && card.saysWaits ? '&#10;says it waits — nothing running here' : '';
@@ -1770,23 +1773,22 @@ function renderKanban(cards) {
 
   board.innerHTML = data.columns.map((column, index) => {
     const inColumn = cards
-      .filter(card => roleColumnOf(card) === column.key)
-      .sort((a, b) => column.key === 'parked'
-        // Parked: live cards first, then dated check-backs, nearest date first.
-        ? (activityRank(a) - activityRank(b) ||
-           (a.checkDate ? 0 : 1) - (b.checkDate ? 0 : 1) ||
-           (a.checkDate || '9').localeCompare(b.checkDate || '9') ||
-           (PRIO_RANK[a.prio] ?? 9) - (PRIO_RANK[b.prio] ?? 9) ||
-           a.number - b.number)
+      .filter(card => laneOf(card) === column.key)
+      .sort((a, b) => column.key === 'tools'
+        // Tools are a jump list: a fixed alphabetical order is what makes
+        // the eye find the same row in the same place every time.
+        ? a.label.localeCompare(b.label) || a.number - b.number
         : (activityRank(a) - activityRank(b) ||
            (PRIO_RANK[a.prio] ?? 9) - (PRIO_RANK[b.prio] ?? 9) ||
            (a.since || '9').localeCompare(b.since || '9') ||
            a.number - b.number));
     const def = COLDEF[column.key] || STATE.unknown;
-    const cardsHtml = inColumn.map(card => {
-      const compact = thinCard(card, column.key) && !expanded.has(card.id);
-      return compact ? compactCard(card) : fullCard(card, column.key);
-    }).join('');
+    const cardsHtml = inColumn.length
+      ? inColumn.map(card => {
+        const compact = thinCard(card, column.key) && !expanded.has(card.id);
+        return compact ? compactCard(card) : fullCard(card, column.key);
+      }).join('')
+      : `<div class="lane-empty">${esc(LANE_EMPTY[column.key] || 'nothing here')}</div>`;
     return `<section class="flight-column" style="--state:${def.color}">
       <header class="column-head">
         <span class="state-glyph">${def.glyph}</span>
@@ -1800,22 +1802,6 @@ function renderKanban(cards) {
   board.querySelectorAll('.column-list').forEach(el => {
     if (scrolls[el.dataset.column]) el.scrollTop = scrolls[el.dataset.column];
   });
-}
-
-// Deep focus: a flat grid of only the picked cards, everything else gone.
-function renderDeepFocus(cards) {
-  const board = document.getElementById('board');
-  board.className = 'list';
-  const picked = cards.filter(card => card.focus);
-  board.innerHTML = `<section class="list-shell">
-    <header class="list-masthead">
-      <span><h2>Deep focus</h2><p>Only the cards you picked with ◎. Everything else — star alarms included — stays silent until you leave.</p></span>
-      <span class="mast-metric">${picked.length} PICKED</span>
-    </header>
-    ${picked.length
-      ? `<div class="focus-grid">${picked.map(card => fullCard(card, 'focus')).join('')}</div>`
-      : `<div class="focus-empty">Nothing picked yet — leave focus mode, click ◎ on the cards that matter, then come back.</div>`}
-  </section>`;
 }
 
 // Team: one row per person — their herdr session plus tracker items.
@@ -1913,12 +1899,12 @@ function renderOther(cards) {
 function renderHeader(allViewCards) {
   const counts = { mine: 0, team: 0, other: 0 };
   for (const card of data.cards) counts[viewOf(card)] = (counts[viewOf(card)] ?? 0) + 1;
-  const picked = data.cards.filter(card => card.focus && viewOf(card) === 'mine').length;
+  const onYouCount = data.cards.filter(card => card.onYou && viewOf(card) === 'mine').length;
   document.getElementById('views').innerHTML = VIEWS.map(key => `<button type="button" class="view-tab ${key === view ? 'on' : ''}" data-view="${key}" aria-pressed="${key === view}"><span>${VIEW_LABELS[key]}</span><span class="count">${counts[key] || 0}</span></button>`).join('')
-    + `<button type="button" class="view-tab deep-toggle ${deepFocus ? 'on' : ''}" id="deepfocus" aria-pressed="${deepFocus}" title="Deep focus: show only ◎-picked cards, silence everything else"><span>◎ Focus</span><span class="count">${picked}</span></button>`;
+    + `<button type="button" class="view-tab deep-toggle ${onlyOnYou ? 'on' : ''}" id="onyou" aria-pressed="${onlyOnYou}" title="Only the cards waiting for your word, in their lanes"><span>◆ On you</span><span class="count">${onYouCount}</span></button>`;
 
   const filters = document.getElementById('filters');
-  if (view === 'mine' && !deepFocus) {
+  if (view === 'mine') {
     const directions = [...new Set(allViewCards.map(card => card.dir).filter(Boolean))];
     if (filter && !directions.includes(filter)) {
       filter = '';
@@ -1957,12 +1943,11 @@ function render() {
 
   const allViewCards = data.cards.filter(card => viewOf(card) === view);
   renderHeader(allViewCards);
-  const visibleCards = view === 'mine' ? allViewCards.filter(card => !filter || card.dir === filter) : allViewCards;
+  const visibleCards = view === 'mine'
+    ? allViewCards.filter(card => (!filter || card.dir === filter) && (!onlyOnYou || card.onYou))
+    : allViewCards;
   if (view === 'team') renderTeam(visibleCards);
   else if (view === 'other') renderOther(visibleCards);
-  // Deep focus ignores the direction filter: the contract is "all picked
-  // cards, nothing else", and the header badge counts the same set.
-  else if (deepFocus) renderDeepFocus(allViewCards);
   else renderKanban(visibleCards);
 
   // Focus changed inside herdr — scroll to the highlighted card.
@@ -2073,13 +2058,13 @@ document.addEventListener('click', async (ev) => {
     window.open(lavish.dataset.lavishUrl, '_blank');
     return;
   }
-  const deep = ev.target.closest('#deepfocus');
-  if (deep) {
-    deepFocus = !deepFocus;
-    localStorage.setItem('board-deep', deepFocus ? '1' : '');
-    // The mode lives on the Mine kanban — arming it elsewhere must act now,
-    // not fire silently on some later return to Mine.
-    if (deepFocus && view !== 'mine') {
+  const onYouBtn = ev.target.closest('#onyou');
+  if (onYouBtn) {
+    onlyOnYou = !onlyOnYou;
+    localStorage.setItem('board-onyou', onlyOnYou ? '1' : '');
+    // The filter lives on the Mine kanban — arming it elsewhere must act
+    // now, not fire silently on some later return to Mine.
+    if (onlyOnYou && view !== 'mine') {
       view = 'mine';
       localStorage.setItem('board-view', view);
     }
@@ -2141,22 +2126,10 @@ document.addEventListener('click', async (ev) => {
     setField(star.dataset.cwd, { star: on || null }, c => { c.star = on; });
     return;
   }
-  const kind = ev.target.closest('.kind-control');
-  if (kind && kind.dataset.cwd) {
-    const next = KIND_NEXT[kind.dataset.kind] ?? 'temp';
-    setField(kind.dataset.cwd, { kind: next || null }, c => { c.kind = next || null; });
-    return;
-  }
-  const role = ev.target.closest('.role-control');
-  if (role && role.dataset.cwd) {
-    const next = ROLE_NEXT[role.dataset.role] ?? 'run';
-    setField(role.dataset.cwd, { role: next || null }, c => { c.role = next || null; });
-    return;
-  }
-  const pick = ev.target.closest('.focuspick-control');
-  if (pick && pick.dataset.cwd) {
-    const on = !pick.dataset.focus;
-    setField(pick.dataset.cwd, { focus: on || null }, c => { c.focus = on; });
+  const type = ev.target.closest('.type-control');
+  if (type && type.dataset.cwd) {
+    const next = TYPE_NEXT[type.dataset.type] ?? 'focus';
+    setField(type.dataset.cwd, { type: next || null }, c => { c.type = next || null; });
     return;
   }
   const due = ev.target.closest('.date-control');
