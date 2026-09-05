@@ -25,16 +25,22 @@ const HERDR_CANDIDATES = [
 ];
 
 const KNOWN_STATUSES = new Set(['blocked', 'done', 'working', 'idle', 'unknown']);
-// Mine columns answer "what do I do with this", not "what did herdr say" —
-// the herdr state stays on the card as a lamp. Assignment logic lives in the
-// page (roleColumnOf); the server only stores the manual fields.
+// Mine lanes are ASSIGNED, never inferred: the operator files each window as
+// focus (today's few), ongoing (built, runs, watched) or tool (fix-it windows,
+// quick jump). Everything unfiled sits in Unsorted until filed. The herdr
+// state and the machine facts stay on every card as lamps — they decide what
+// the card SAYS (on you / live / silent), never which lane it is in.
 const COLUMNS = [
-  { key: 'decisions', title: 'Decisions — on you' },
-  { key: 'focus',     title: 'Focus' },
-  { key: 'running',   title: 'Running' },
-  { key: 'tools',     title: 'Tools' },
-  { key: 'parked',    title: 'Parked' },
+  { key: 'focus',    title: 'Focus — today' },
+  { key: 'ongoing',  title: 'Ongoing' },
+  { key: 'tools',    title: 'Tools' },
+  { key: 'unsorted', title: 'Unsorted' },
 ];
+const TYPES = new Set(['focus', 'ongoing', 'tool']);
+// The day plan: what each focus window was launched on, when, and the
+// dispatcher's notes — the tracker the morning sit-down writes into.
+const PLAN_FILE = path.join(STATE_DIR, 'plan.json');
+const PULSE_MS = 15 * 60 * 1000;
 
 function herdr(args) {
   return new Promise((resolve, reject) => {
@@ -520,13 +526,14 @@ async function refreshLavish() {
 async function collect() {
   if (remoteState.checkedAt === 0) await refreshRemote(); else refreshRemote();
   if (lavishState.checkedAt === 0) await refreshLavish(); else refreshLavish();
-  const [snapRes, wsListRes, agentListRes, projects, seen, remoteMapRaw] = await Promise.all([
+  const [snapRes, wsListRes, agentListRes, projects, seen, remoteMapRaw, plan] = await Promise.all([
     herdr(['api', 'snapshot']),
     herdr(['workspace', 'list']).catch(() => null), // the snapshot lacks the repo binding
     herdr(['agent', 'list']).catch(() => null), // pane -> session id, for recaps
     loadProjects(),
     loadSeen(),
     readJsonSoft(REMOTE_FILE, {}),
+    readJsonSoft(PLAN_FILE, {}),
   ]);
   // Recap lines: only panes with an attached agent have a session journal.
   // The local-model summary wins when it exists; the session's last words
@@ -708,9 +715,11 @@ async function collect() {
       dir: proj?.dir ?? null,
       prio: proj?.prio ?? null,
       star: proj?.star === true,
-      kind: proj?.kind ?? null,
-      role: proj?.role ?? null,
-      focus: proj?.focus === true,
+      // The lane, filed by hand (inherited by subfolders like prio and dir).
+      type: TYPES.has(proj?.type) ? proj.type : null,
+      // The plan is per exact folder, like the note: what this window was
+      // launched on and when, plus the dispatcher's log lines.
+      plan: plan[cwd] && typeof plan[cwd] === 'object' ? plan[cwd] : null,
       checkDate: proj?.checkDate ?? null,
       view: proj?.view ?? null,
       // A note is strictly manual and strictly per-folder: set and cleared
@@ -762,6 +771,7 @@ async function collect() {
       since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,
     };
   });
+  for (const card of cards) card.onYou = onYouOf(card, nowMs);
 
   // Persist each pane's current wait so a re-arming watcher keeps its start
   // time and its grace across polls and restarts; a pane with no wait left
@@ -797,13 +807,130 @@ async function collect() {
   };
 }
 
+// --- "On you": the one verdict the board raises by itself. A card is on the
+// operator when nothing but the operator can move it. What counts depends on
+// the lane he filed it in: a focus window should be moving, so a stopped
+// session there is his turn; an ongoing window is expected to rest, so only
+// a real stop (blocked, a review page, the usage limit, an ended lane, a
+// silent star) calls him; tools and unsorted windows never do — filing is
+// the only call an unsorted window makes. Level "alarm" = something that
+// must run does not; "ask" = a session waiting for his word.
+function onYouOf(card, nowMs) {
+  const lane = card.type;
+  if (lane !== 'focus' && lane !== 'ongoing') return null;
+  const live = card.status === 'working' || Boolean(card.remote);
+  const inMotion = Boolean(card.agent && card.motion);
+  const pulse = card.lastWorkingAt && nowMs - Date.parse(card.lastWorkingAt) < PULSE_MS;
+  if (card.paused) return { level: 'alarm', reason: 'usage limit — resume it or switch model' };
+  if (card.laneOver) return { level: 'alarm', reason: 'lane on the second machine ended — the session does not know, wake it' };
+  if (!card.agent) {
+    if (lane === 'focus') return { level: 'alarm', reason: 'no agent in this window — bring the session back' };
+    return card.star ? { level: 'alarm', reason: 'must run — no agent in this window' } : null;
+  }
+  if (card.status === 'blocked') return { level: 'ask', reason: 'blocked — the session is asking you' };
+  if ((card.lavish ?? []).length) return { level: 'ask', reason: 'review page waits for your verdict' };
+  if (card.checkDate && card.checkDate <= new Date(nowMs).toISOString().slice(0, 10)) return { level: 'ask', reason: `check-back date ${card.checkDate.slice(8, 10)}.${card.checkDate.slice(5, 7)} has arrived` };
+  if (live || inMotion) return null;
+  if (lane === 'focus') return { level: 'ask', reason: card.plan?.task && card.plan.status !== 'done' ? 'stopped — next step is yours' : 'no task launched yet — launch it' };
+  if (card.star && !pulse) return { level: 'alarm', reason: 'must run — silent' };
+  return null;
+}
+
+// --- The dispatcher's brief: the whole fleet as a few KB of plain text, so
+// the sit-down agent reads one page instead of forty windows. Facts only —
+// what lane, what state, what it was launched on, its last words, what is
+// on the operator — in the order the sit-down goes through them.
+function ageWords(iso, nowMs) {
+  if (!iso) return '';
+  const m = Math.round((nowMs - Date.parse(iso)) / 60000);
+  if (m < 2) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  if (m < 48 * 60) return `${Math.round(m / 60)} h ago`;
+  return `${Math.round(m / 60 / 24)} d ago`;
+}
+function buildBrief(payload) {
+  const nowMs = Date.parse(payload.generatedAt);
+  const mine = payload.cards.filter(c => (c.view ?? 'mine') === 'mine');
+  const byNumber = (a, b) => (a.number ?? 999) - (b.number ?? 999);
+  const state = (c) => {
+    if (c.status === 'working') return 'WORKING';
+    if (c.remote) return 'WORKING on the second machine';
+    if (c.motion) return `IN MOTION (${c.motion.label})`;
+    if (!c.agent) return 'NO AGENT';
+    if (c.status === 'blocked') return 'BLOCKED';
+    return `${c.status.toUpperCase()}${c.lastLineAt ? ` · last word ${ageWords(c.lastLineAt, nowMs)}` : ''}`;
+  };
+  const head = (c) => `#${c.number ?? '·'} ${c.label}${c.wsLabel && c.wsLabel !== c.label ? ` (${c.wsLabel})` : ''}${c.prio ? ` ${c.prio}` : ''}${c.star ? ' ★' : ''}`;
+  const lines = [];
+  lines.push(`SHEEPDOG BRIEF · ${new Date(nowMs).toISOString().slice(0, 16).replace('T', ' ')} UTC · ${mine.length} windows on Mine`);
+  const onYou = mine.filter(c => c.onYou);
+  lines.push('', `ON YOU (${onYou.length})`);
+  if (!onYou.length) lines.push('  nothing — the fleet needs no word from you right now');
+  for (const c of onYou.sort(byNumber)) lines.push(`  ${c.onYou.level === 'alarm' ? '!!' : '? '} ${head(c)} — ${c.onYou.reason}`);
+  const focus = mine.filter(c => c.type === 'focus').sort(byNumber);
+  lines.push('', `FOCUS (${focus.length})`);
+  if (!focus.length) lines.push('  nothing filed as focus yet — pick today\'s windows: dispatch type <window> focus');
+  for (const c of focus) {
+    lines.push(`  ${head(c)} · ${state(c)}`);
+    if (c.plan?.task) lines.push(`    task: ${c.plan.task}${c.plan.launchedAt ? ` (launched ${ageWords(c.plan.launchedAt, nowMs)}${c.plan.status === 'done' ? ', done' : ''})` : ''}`);
+    else lines.push('    task: none launched yet');
+    if (c.recap) lines.push(`    now: ${c.recap}`);
+    for (const l of (c.plan?.log ?? []).slice(-2)) lines.push(`    log ${ageWords(l.at, nowMs)}: ${l.text}`);
+    if (c.note) lines.push(`    note: ${c.note}`);
+  }
+  const ongoing = mine.filter(c => c.type === 'ongoing').sort(byNumber);
+  lines.push('', `ONGOING (${ongoing.length})`);
+  for (const c of ongoing) lines.push(`  ${head(c)} · ${state(c)}${c.onYou ? ` · ON YOU: ${c.onYou.reason}` : ''}${c.recap ? ` · ${c.recap}` : ''}`);
+  const tools = mine.filter(c => c.type === 'tool').sort((a, b) => a.label.localeCompare(b.label));
+  lines.push('', `TOOLS (${tools.length}): ${tools.map(c => `#${c.number} ${c.label}`).join(' · ') || 'none'}`);
+  const unsorted = mine.filter(c => !c.type).sort(byNumber);
+  lines.push('', `UNSORTED (${unsorted.length}) — file them: dispatch type <window> focus|ongoing|tool`);
+  for (const c of unsorted) lines.push(`  ${head(c)} · ${state(c)}${c.recap ? ` · ${c.recap.slice(0, 90)}` : ''}`);
+  const loose = payload.lavish?.unattached ?? [];
+  if (loose.length) lines.push('', `REVIEW PAGES WITHOUT A WINDOW (${loose.length}): ${loose.map(a => a.name).join(' · ')}`);
+  if (payload.facts?.offline) lines.push('', `FACTS OFFLINE: ${payload.facts.reason || 'the process sweep is down — "in motion" cannot be trusted'}`);
+  return lines.join('\n') + '\n';
+}
+
+// The plan is the dispatcher's tracker: one entry per exact folder.
+// task = what the window was launched on (sets launchedAt, resets done);
+// status = launched | done; note = one log line appended; clear = drop it.
+function setPlan(cwd, patch) {
+  return queued(async () => {
+    const key = normPath(cwd);
+    if (!key) throw new Error('no folder given');
+    const raw = await readJsonSoft(PLAN_FILE, {});
+    const cur = raw[key] && typeof raw[key] === 'object' ? raw[key] : {};
+    if (patch.clear === true) { delete raw[key]; await writeJsonAtomic(PLAN_FILE, raw); return; }
+    const now = new Date().toISOString();
+    const entry = { ...cur };
+    if (patch.task !== undefined) {
+      if (typeof patch.task !== 'string' || !patch.task.trim() || patch.task.length > 600) throw new Error('task must be 1-600 characters');
+      entry.task = patch.task.trim();
+      entry.launchedAt = now;
+      entry.status = 'launched';
+    }
+    if (patch.status !== undefined) {
+      if (!['launched', 'done'].includes(patch.status)) throw new Error('status must be launched or done');
+      if (!entry.task) throw new Error('no task to mark — launch one first');
+      entry.status = patch.status;
+      if (patch.status === 'done') entry.doneAt = now; else delete entry.doneAt;
+    }
+    if (patch.note !== undefined) {
+      if (typeof patch.note !== 'string' || !patch.note.trim() || patch.note.length > 300) throw new Error('note must be 1-300 characters');
+      entry.log = [...(entry.log ?? []), { at: now, text: patch.note.trim() }].slice(-12);
+    }
+    if (!entry.task && !entry.log?.length) throw new Error('nothing to store');
+    raw[key] = entry;
+    await writeJsonAtomic(PLAN_FILE, raw);
+  });
+}
+
 // Which fields the board may change, and how: null erases the field.
 const FIELD_CHECK = {
   prio: v => v === null || ['P1', 'P2', 'P3'].includes(v),
   star: v => v === null || typeof v === 'boolean',
-  kind: v => v === null || ['temp', 'ongoing', 'cron'].includes(v),
-  role: v => v === null || ['run', 'tool', 'parked'].includes(v),
-  focus: v => v === null || typeof v === 'boolean',
+  type: v => v === null || TYPES.has(v),
   checkDate: v => {
     if (v === null) return true;
     if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
@@ -939,6 +1066,16 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/debug') {
       return send(res, 200, JSON.stringify(requestLog));
+    }
+    if (req.method === 'GET' && url.pathname === '/brief') {
+      return send(res, 200, buildBrief(await collect()), 'text/plain; charset=utf-8');
+    }
+    if (req.method === 'POST' && url.pathname === '/plan') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const { cwd, ...patch } = JSON.parse(body);
+      await setPlan(cwd, patch);
+      return send(res, 200, '{"ok":true}');
     }
     if (req.method === 'POST' && url.pathname === '/focus') {
       let body = '';
