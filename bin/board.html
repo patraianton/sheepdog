@@ -416,9 +416,11 @@
   }
 
   .card-body { position: relative; padding: 7px; }
+  /* The identity column has a floor: whatever sits to its right, the name
+     never collapses to a letter per line. */
   .card-head {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(min(12ch, 100%), 1fr) auto;
     align-items: start;
     gap: 6px;
     min-width: 0;
@@ -780,12 +782,15 @@
     width: 3px;
     background: var(--dir-color);
   }
+  /* The name column has a floor (12ch): whatever sits to its right, the name
+     never collapses to a letter per line. Rows are placed explicitly so the
+     right-hand bay can drop onto a second row without shifting the age. */
   .compact-grid {
     min-height: 26px;
     display: grid;
-    grid-template-columns: 16px 26px minmax(0, 1fr) auto auto;
+    grid-template-columns: 16px 26px minmax(min(12ch, 100%), 1fr) auto auto;
     align-items: center;
-    gap: 5px;
+    gap: 2px 5px;
     min-width: 0;
     padding: 2px 6px 2px 6px;
   }
@@ -840,13 +845,24 @@
      and compact cards alike (declared after .compact-repo so it wins there). */
   .affil-tree { color: #6f9d8a; font-style: italic; }
   /* Signals and hover controls share one right-hand bay. Only one of them is
-     shown at a time, so arriving with the pointer costs a few pixels of
-     reflow — never a name covered mid-letter by a floating panel. */
+     shown at a time. While the bay holds signals it sits beside the name;
+     when it holds the rack of controls (pointer, keyboard focus, or the
+     Unsorted lane) it drops onto its own row under the name, spanning the
+     grid and right-aligned — the rack never competes with the name for
+     width, and never floats over it. The row grows by one button-row. */
   .compact-right {
+    grid-column: 4;
+    grid-row: 1;
     display: flex;
     align-items: center;
     justify-content: flex-end;
     min-width: 0;
+  }
+  .flight-card.compact:hover .compact-right,
+  .flight-card.compact:focus-within .compact-right,
+  .column-list[data-column="unsorted"] .flight-card.compact .compact-right {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
   .compact-signals { display: flex; align-items: center; gap: 3px; }
   /* Flag, star and priority keep fixed slots at the right of the group, so the
@@ -879,6 +895,8 @@
   /* Fixed width, not "as wide as the text": a row reading "24 min" must not
      shove its own signal chips out of the column the other rows keep. */
   .compact-age {
+    grid-column: 5;
+    grid-row: 1;
     width: 34px;
     min-width: 34px;
     overflow: hidden;
@@ -894,6 +912,11 @@
   .flight-card.compact:focus-within .compact-signals { display: none; }
   .flight-card.compact:hover .compact-actions,
   .flight-card.compact:focus-within .compact-actions { display: flex; }
+  /* Unsorted rows show the rack permanently: filing is the only call on them,
+     and it must be one click on the lane picker (· → ◎), not a hunt for a
+     hidden button. Tools and Ongoing rows keep the hover reveal. */
+  .column-list[data-column="unsorted"] .flight-card.compact .compact-signals { display: none; }
+  .column-list[data-column="unsorted"] .flight-card.compact .compact-actions { display: flex; }
   .compact-actions .control { width: 18px; min-width: 18px; height: 18px; padding: 0; font-size: 7px; }
   .compact-actions .control.confirm { width: auto; padding: 0 3px; }
 
@@ -1209,7 +1232,7 @@
     /* A narrow column tightens the strip, it does not empty it: the flag, the
        star, the priority and the age stay — only the reserved empty slots are
        given up, so the signals pack tight and the name wraps onto more lines. */
-    .compact-grid { grid-template-columns: 16px 22px minmax(0, 1fr) auto auto; gap: 3px; }
+    .compact-grid { grid-template-columns: 16px 22px minmax(min(12ch, 100%), 1fr) auto auto; gap: 2px 3px; }
     .signal { min-width: 15px; height: 15px; padding: 0 2px; }
     .signal.slot-empty { display: none; }
     .compact-signals { gap: 2px; }
