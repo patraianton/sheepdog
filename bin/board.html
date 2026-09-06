@@ -339,13 +339,21 @@
     scrollbar-width: thin;
     scrollbar-color: #2f4356 transparent;
   }
-  .column-list[data-column="focus"] {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-content: start;
-    align-items: start;
+  /* Two abreast only when the lane is wide enough for two readable full
+     cards (~320px each); a narrower lane keeps one stack. */
+  @container (min-width: 640px) {
+    .column-list[data-column="focus"] {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      /* max-content rows: the list has a fixed height (it scrolls), and cards
+         clip their overflow, so 'auto' rows would split that height evenly
+         and cut the cards — the rows must fit the taller card of each pair. */
+      grid-auto-rows: max-content;
+      align-content: start;
+      align-items: start;
+    }
+    .column-list[data-column="focus"] .lane-empty { grid-column: 1 / -1; }
   }
-  .column-list[data-column="focus"] .lane-empty { grid-column: 1 / -1; }
   /* An empty lane says what would fill it — the empty Focus lane is the
      morning's cue, not dead space. */
   .lane-empty {
