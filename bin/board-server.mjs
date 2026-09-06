@@ -667,12 +667,20 @@ async function collect() {
     const multiTab = (ws?.tab_count ?? 1) > 1;
     const tabName = tab?.label && !/^\d+$/.test(tab.label) ? tab.label : null;
     const wsName = branchNameByWs.get(p.workspace_id) ?? ws?.label ?? '';
-    const label = (multiTab ? tabName : null) || wsName || tab?.label || '';
+    const machineLabel = (multiTab ? tabName : null) || wsName || tab?.label || '';
+    // An alias is the operator's own name for the CARD ("Promo fix" for
+    // fix/promo-f-2026-09-06): board-only, strictly per exact folder like the
+    // note (never inherited from a parent entry), and never written to herdr.
+    // `label` is what every consumer displays and sorts by; `machineLabel`
+    // keeps the herdr name so the binding stays visible.
+    const alias = typeof projects.get(cwd)?.alias === 'string' && projects.get(cwd).alias.trim()
+      ? projects.get(cwd).alias.trim() : null;
+    const label = alias ?? machineLabel;
     // Empty titles, titles hidden with the × button, and stale ones (unchanged
     // for 3 days) are not shown — a "prep for the morning shift" title four
     // days later only misleads.
     let title = p.terminal_title_stripped || p.terminal_title || '';
-    if (JUNK_TITLES.has(title) || title === label || title === proj?.hideTitle) title = '';
+    if (JUNK_TITLES.has(title) || title === machineLabel || title === proj?.hideTitle) title = '';
     if (title) {
       const born = seen[`${cwd}|~t:${strHash(title)}`]?.since;
       if (born && Date.parse(now) - Date.parse(born) > 72 * 3600 * 1000) title = '';
@@ -709,6 +717,8 @@ async function collect() {
       repo: repoByWs.get(p.workspace_id) ?? null,
       tree: linkedWs.has(p.workspace_id),
       label,
+      machineLabel,
+      alias,
       status,
       focused: p.focused,
       cwd,
@@ -860,7 +870,9 @@ function buildBrief(payload) {
     if (c.status === 'blocked') return 'BLOCKED';
     return `${c.status.toUpperCase()}${c.lastLineAt ? ` · last word ${ageWords(c.lastLineAt, nowMs)}` : ''}`;
   };
-  const head = (c) => `#${c.number ?? '·'} ${c.label}${c.wsLabel && c.wsLabel !== c.label ? ` (${c.wsLabel})` : ''}${c.prio ? ` ${c.prio}` : ''}${c.star ? ' ★' : ''}`;
+  // An aliased card prints the alias as its name and the machine name in
+  // parentheses, so the dispatcher can still match the window either way.
+  const head = (c) => `#${c.number ?? '·'} ${c.label}${c.machineLabel && c.machineLabel !== c.label ? ` (${c.machineLabel})` : c.wsLabel && c.wsLabel !== c.label ? ` (${c.wsLabel})` : ''}${c.prio ? ` ${c.prio}` : ''}${c.star ? ' ★' : ''}`;
   const lines = [];
   lines.push(`SHEEPDOG BRIEF · ${new Date(nowMs).toISOString().slice(0, 16).replace('T', ' ')} UTC · ${mine.length} windows on Mine`);
   const onYou = mine.filter(c => c.onYou);
@@ -941,6 +953,8 @@ const FIELD_CHECK = {
   view: v => v === null || ['mine', 'team', 'other'].includes(v),
   hideTitle: v => v === null || (typeof v === 'string' && v.length <= 300),
   note: v => v === null || (typeof v === 'string' && v.length <= 300),
+  // The card's hand-given name (board-only, per exact folder, never herdr's).
+  alias: v => v === null || (typeof v === 'string' && v.trim().length >= 1 && v.trim().length <= 80),
 };
 
 function setFields(cwd, patch) {
@@ -951,6 +965,7 @@ function setFields(cwd, patch) {
     for (const [f, v] of Object.entries(patch)) {
       if (!FIELD_CHECK[f]) throw new Error(`unknown field ${f}`);
       if (!FIELD_CHECK[f](v)) throw new Error(`bad value for field ${f}`);
+      if (f === 'alias' && typeof v === 'string') patch[f] = v.trim();
     }
     // Look for an existing key (itself or a parent), otherwise create a new one.
     let target = null;
@@ -965,7 +980,8 @@ function setFields(cwd, patch) {
     const base = target && normPath(target) !== key ? { ...raw[target] } : (raw[target] ?? {});
     // A parent's note never travels into a child entry: notes are per-folder,
     // and baking one in here is how a stale root note haunted new projects.
-    if (target && normPath(target) !== key) delete base.note;
+    // The alias is per-folder for the same reason: it names ONE card.
+    if (target && normPath(target) !== key) { delete base.note; delete base.alias; }
     const entryKey = target && normPath(target) === key ? target : key;
     const entry = { ...base };
     for (const [f, v] of Object.entries(patch)) {

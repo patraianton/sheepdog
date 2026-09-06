@@ -13,11 +13,14 @@
 //   node bin\dispatch.mjs note <window> "<line>"         append a log line to the window's plan
 //   node bin\dispatch.mjs done <window>                  mark the launched task done
 //   node bin\dispatch.mjs clear <window>                 drop the window's plan
+//   node bin\dispatch.mjs rename <window> "<alias>"      name the CARD (board only; "" or none clears)
 //
 // <window> is the herdr window number (#12 or 12) or a unique part of the
-// card's name. Sending a task into a session is `herdr agent prompt`: it only
-// works from inside a herdr pane, and only on the operator's word — this
-// tool never decides to launch anything by itself.
+// card's name — its alias or its machine name, exact match first. Sending a
+// task into a session is `herdr agent prompt`: it only works from inside a
+// herdr pane, and only on the operator's word — this tool never decides to
+// launch anything by itself. An alias renames the card on the board and
+// nothing else: the window keeps its herdr name and its folder.
 
 import { execFile } from 'node:child_process';
 import path from 'node:path';
@@ -61,21 +64,25 @@ async function boardPost(pathname, body) {
   if (!r.ok) die(`board ${pathname}: ${(await r.json().catch(() => ({}))).error || r.status}`);
 }
 
-// A window is named by its number or by a unique part of its card's name;
-// among the cards of one window the agent pane wins.
+// A window is named by its number or by a unique part of its card's name —
+// the alias or the machine name, exact first, then substring; among the
+// cards of one window the agent pane wins.
+const namesOf = (c) => [c.label, c.machineLabel].filter(Boolean).map(n => n.toLowerCase());
+const shown = (c) => `${c.label}${c.machineLabel && c.machineLabel !== c.label ? ` (${c.machineLabel})` : ''}`;
 async function findCard(selector) {
   const sel = String(selector ?? '').trim();
   if (!sel) die('which window? give its number (#12) or part of its name');
   const data = await (await boardGet('/data')).json();
   const mine = data.cards.filter(c => (c.view ?? 'mine') === 'mine' && c.cwd);
   const num = sel.match(/^#?(\d+)$/);
+  const want = sel.toLowerCase();
   let hits = num
     ? mine.filter(c => c.number === Number(num[1]))
-    : mine.filter(c => c.label.toLowerCase() === sel.toLowerCase());
-  if (!hits.length && !num) hits = mine.filter(c => c.label.toLowerCase().includes(sel.toLowerCase()));
+    : mine.filter(c => namesOf(c).some(n => n === want));
+  if (!hits.length && !num) hits = mine.filter(c => namesOf(c).some(n => n.includes(want)));
   if (!hits.length) die(`no window matches "${sel}" — run "dispatch brief" for the list`);
   const distinct = new Set(hits.map(c => c.cwd));
-  if (distinct.size > 1) die(`"${sel}" is ambiguous:\n` + hits.map(c => `  #${c.number} ${c.label} — ${c.cwd}`).join('\n'));
+  if (distinct.size > 1) die(`"${sel}" is ambiguous:\n` + hits.map(c => `  #${c.number} ${shown(c)} — ${c.cwd}`).join('\n'));
   return hits.sort((a, b) => (a.agent ? 0 : 1) - (b.agent ? 0 : 1))[0];
 }
 
@@ -126,6 +133,18 @@ switch (cmd) {
     console.log(`#${card.number} ${card.label}: plan cleared`);
     break;
   }
+  case 'rename': {
+    // The alias lives in the board's own state, keyed by the folder; herdr
+    // never sees it. An empty string or "none" takes the alias off again.
+    if (rest.length === 0) die('rename needs the new name: dispatch rename <window> "<alias>" ("" or none clears)');
+    const alias = text.toLowerCase() === 'none' ? '' : text.slice(0, 80);
+    const card = await findCard(target);
+    await boardPost('/set', { cwd: card.cwd, alias: alias || null });
+    console.log(alias
+      ? `#${card.number} ${card.machineLabel || card.label} → "${alias}" (board only; the window keeps its name)`
+      : `#${card.number} ${card.machineLabel || card.label}: alias cleared`);
+    break;
+  }
   default:
-    die('usage: dispatch brief | type <window> focus|ongoing|tool|none | launch <window> "<task>" [--record-only] | note <window> "<line>" | done <window> | clear <window>', 2);
+    die('usage: dispatch brief | type <window> focus|ongoing|tool|none | launch <window> "<task>" [--record-only] | note <window> "<line>" | done <window> | clear <window> | rename <window> "<alias>"', 2);
 }
