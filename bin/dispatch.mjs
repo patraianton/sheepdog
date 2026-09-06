@@ -139,7 +139,8 @@ switch (cmd) {
     if (rest.length === 0) die('rename needs the new name: dispatch rename <window> "<alias>" ("" or none clears)');
     const alias = text.toLowerCase() === 'none' ? '' : text.slice(0, 80);
     const card = await findCard(target);
-    await boardPost('/set', { cwd: card.cwd, alias: alias || null });
+    // The alias names this one window (two windows may share a folder).
+    await boardPost('/set', { cwd: card.cwd, alias: alias || null, ws: String(card.id).split(':')[0] });
     console.log(alias
       ? `#${card.number} ${card.machineLabel || card.label} → "${alias}" (board only; the window keeps its name)`
       : `#${card.number} ${card.machineLabel || card.label}: alias cleared`);

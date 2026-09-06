@@ -44,7 +44,8 @@ forty windows do I sit down with today, and is everything else fine?
   "<alias>"` (or the ✎ button in the card's rack) gives the CARD a name you
   will remember ("Promo fix" instead of `fix/promo-f-2026-09-06`). The alias
   is board-only: it lives in `state/projects.json` under that exact folder,
-  is never inherited by subfolders and never touches herdr — the window keeps
+  keyed by the herdr window id (two windows on one folder are two cards with
+  two names), is never inherited by subfolders and never touches herdr — the window keeps
   its own name, printed in a small line under the alias so the binding stays
   visible. The brief prints `#42 Promo fix (fix/promo-f-2026-09-06)`, and
   every `dispatch` command accepts either name. An empty alias (or `none`)
