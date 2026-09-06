@@ -140,6 +140,43 @@ async function lastAssistantText(file) {
 const RECAP_API = process.env.SHEEPDOG_RECAP_URL || 'http://127.0.0.1:1234/v1/chat/completions';
 const RECAP_MODEL = process.env.SHEEPDOG_RECAP_MODEL || 'qwen3-4b-instruct-2507';
 const RECAP_KEY = process.env.SHEEPDOG_RECAP_KEY ?? '';
+// Night profile (operator's call, 2026-08-22, evening): while the big model on :8099 is
+// up, the board asks IT and must not pull its own 4B into LM Studio next to it - the two
+// together broke the conveyor's long requests ("bad allocation", night of 21->22.08).
+// So every recap first looks at :8099: ready -> ask it; port open but not answering
+// (weights still loading) -> skip this round, because asking LM Studio now would load
+// the 4B right when the 27B needs the whole card; port closed -> the day path above.
+// An explicit SHEEPDOG_RECAP_URL switches the probe off.
+const NIGHT_BASE = process.env.SHEEPDOG_RECAP_NIGHT_URL || 'http://127.0.0.1:8099';
+const NIGHT_KEY_FILE = process.env.SHEEPDOG_RECAP_NIGHT_KEY_FILE
+  || path.join(process.env.USERPROFILE || process.env.HOME || '', '.local', 'llamacpp', 'api-key.txt');
+const NIGHT_PROBE_TTL_MS = 15_000;
+let nightProbe = { at: 0, state: 'off', model: '' }; // state: off | loading | ready
+async function nightKey() {
+  if (process.env.SHEEPDOG_RECAP_NIGHT_KEY) return process.env.SHEEPDOG_RECAP_NIGHT_KEY;
+  return (await readFile(NIGHT_KEY_FILE, 'utf8').catch(() => '')).trim();
+}
+async function probeNight() {
+  if (process.env.SHEEPDOG_RECAP_URL) return { state: 'off', model: '' };
+  if (Date.now() - nightProbe.at < NIGHT_PROBE_TTL_MS) return nightProbe;
+  let state = 'off', model = '';
+  try {
+    const key = await nightKey();
+    const res = await fetch(`${NIGHT_BASE}/v1/models`, {
+      headers: key ? { Authorization: `Bearer ${key}` } : {},
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (res.ok) {
+      const j = await res.json().catch(() => ({}));
+      model = String(j.data?.[0]?.id ?? '');
+      state = model ? 'ready' : 'loading';
+    } else {
+      state = 'loading'; // 503 while the weights load (or a key mismatch): the card is spoken for either way
+    }
+  } catch { state = 'off'; } // connection refused / timeout: the big model is not up
+  nightProbe = { at: Date.now(), state, model };
+  return nightProbe;
+}
 const RECAP_COOLDOWN_MS = 120_000;
 const aiRecapCache = new Map(); // file -> { mtime, hash, at, text }
 const recapQueue = [];
@@ -191,11 +228,16 @@ function jsonSchema(name, properties) {
 const RECAP_SCHEMA = jsonSchema('recap', { recap: { type: 'string' } });
 
 async function askModel(content, schema, maxTokens) {
-  const res = await fetch(RECAP_API, {
+  const night = await probeNight();
+  if (night.state === 'loading') throw new Error('recap: the big model is still loading');
+  const api = night.state === 'ready' ? `${NIGHT_BASE}/v1/chat/completions` : RECAP_API;
+  const model = night.state === 'ready' ? night.model : RECAP_MODEL;
+  const key = night.state === 'ready' ? await nightKey() : RECAP_KEY;
+  const res = await fetch(api, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(RECAP_KEY ? { Authorization: `Bearer ${RECAP_KEY}` } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
     body: JSON.stringify({
-      ...(RECAP_MODEL ? { model: RECAP_MODEL } : {}),
+      ...(model ? { model } : {}),
       chat_template_kwargs: { enable_thinking: false },
       messages: [{ role: 'user', content }],
       response_format: schema,
@@ -326,6 +368,16 @@ async function readJsonStrict(file) {
 
 // Last successfully parsed mapping — in case the file is being edited live.
 let projectsGood = null;
+// The newest collected cards, so a per-window write can see the folder's
+// other windows without another herdr round-trip.
+let lastCards = [];
+
+// The card's hand-given name for THIS window, else the folder-wide one.
+function aliasOf(entry, workspaceId) {
+  const own = entry?.aliases && typeof entry.aliases === 'object' ? entry.aliases[workspaceId] : undefined;
+  const raw = typeof own === 'string' ? own : entry?.alias;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
 async function loadProjects() {
   try {
     projectsGood = await readJsonStrict(PROJECTS_FILE);
@@ -669,12 +721,14 @@ async function collect() {
     const wsName = branchNameByWs.get(p.workspace_id) ?? ws?.label ?? '';
     const machineLabel = (multiTab ? tabName : null) || wsName || tab?.label || '';
     // An alias is the operator's own name for the CARD ("Promo fix" for
-    // fix/promo-f-2026-09-06): board-only, strictly per exact folder like the
-    // note (never inherited from a parent entry), and never written to herdr.
+    // fix/promo-f-2026-09-06): board-only and never written to herdr. It is
+    // kept PER WINDOW (`aliases[<workspace id>]` in the folder's entry): two
+    // herdr windows may share one folder and each is its own card (operator,
+    // 2026-09-06). Never inherited from a parent entry. A folder-wide `alias`
+    // is the pre-per-window form, read as a fallback until the next rename.
     // `label` is what every consumer displays and sorts by; `machineLabel`
     // keeps the herdr name so the binding stays visible.
-    const alias = typeof projects.get(cwd)?.alias === 'string' && projects.get(cwd).alias.trim()
-      ? projects.get(cwd).alias.trim() : null;
+    const alias = aliasOf(projects.get(cwd), p.workspace_id);
     const label = alias ?? machineLabel;
     // Empty titles, titles hidden with the × button, and stale ones (unchanged
     // for 3 days) are not shown — a "prep for the morning shift" title four
@@ -795,6 +849,7 @@ async function collect() {
     if (dirty) await writeJsonAtomic(SEEN_FILE, seen);
   });
 
+  lastCards = cards; // for the alias writer: which other windows share a folder
   return {
     generatedAt: now,
     columns: COLUMNS,
@@ -953,15 +1008,20 @@ const FIELD_CHECK = {
   view: v => v === null || ['mine', 'team', 'other'].includes(v),
   hideTitle: v => v === null || (typeof v === 'string' && v.length <= 300),
   note: v => v === null || (typeof v === 'string' && v.length <= 300),
-  // The card's hand-given name (board-only, per exact folder, never herdr's).
+  // The card's hand-given name (board-only, per window, never herdr's).
   alias: v => v === null || (typeof v === 'string' && v.trim().length >= 1 && v.trim().length <= 80),
 };
+const WS_ID = /^w[0-9A-Za-z]+$/;
 
 function setFields(cwd, patch) {
   return queued(async () => {
     const raw = await readJsonStrict(PROJECTS_FILE);
     const key = normPath(cwd);
     if (!key) throw new Error('this session has no folder — nowhere to store the value');
+    // `ws` is not a field: it says WHICH window of the folder an alias names.
+    const { ws, ...fields } = patch;
+    patch = fields;
+    if ('alias' in patch && !(typeof ws === 'string' && WS_ID.test(ws))) throw new Error('an alias needs the window id (ws)');
     for (const [f, v] of Object.entries(patch)) {
       if (!FIELD_CHECK[f]) throw new Error(`unknown field ${f}`);
       if (!FIELD_CHECK[f](v)) throw new Error(`bad value for field ${f}`);
@@ -980,11 +1040,26 @@ function setFields(cwd, patch) {
     const base = target && normPath(target) !== key ? { ...raw[target] } : (raw[target] ?? {});
     // A parent's note never travels into a child entry: notes are per-folder,
     // and baking one in here is how a stale root note haunted new projects.
-    // The alias is per-folder for the same reason: it names ONE card.
-    if (target && normPath(target) !== key) { delete base.note; delete base.alias; }
+    // Aliases are per-window for the same reason: each names ONE card.
+    if (target && normPath(target) !== key) { delete base.note; delete base.alias; delete base.aliases; }
     const entryKey = target && normPath(target) === key ? target : key;
     const entry = { ...base };
     for (const [f, v] of Object.entries(patch)) {
+      if (f === 'alias') {
+        const aliases = { ...(entry.aliases && typeof entry.aliases === 'object' ? entry.aliases : {}) };
+        // A folder-wide alias from before per-window naming: the other live
+        // windows of this folder keep it as their own, then it is retired.
+        if (typeof entry.alias === 'string' && entry.alias.trim()) {
+          for (const c of lastCards) {
+            const cws = String(c.id || '').split(':')[0];
+            if (normPath(c.cwd) === key && cws && cws !== ws && !(cws in aliases)) aliases[cws] = entry.alias.trim();
+          }
+          delete entry.alias;
+        }
+        if (v === null) delete aliases[ws]; else aliases[ws] = v;
+        if (Object.keys(aliases).length) entry.aliases = aliases; else delete entry.aliases;
+        continue;
+      }
       if (v === null) delete entry[f];
       else entry[f] = v;
     }

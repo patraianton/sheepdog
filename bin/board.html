@@ -1445,7 +1445,8 @@ let pendingOffTimer = null;
 // cwd whose note is being typed right now; repaints hold off so the input
 // (and the text in it) survives the 3-second refresh cycle.
 let noteEditing = null;
-// cwd whose alias (the card's hand-given name) is being typed right now.
+// Pane id of the card whose alias (its hand-given name) is being typed right
+// now — the pane, not the folder: two windows may share one folder.
 let aliasEditing = null;
 const expanded = new Set();
 
@@ -1708,8 +1709,8 @@ function renameControl(card) {
 // The card's name: the alias input while renaming, else the label with the
 // machine name right under it when the two differ.
 function nameBlock(card) {
-  if (aliasEditing === card.cwd) {
-    return `<input class="alias-input" data-cwd="${esc(card.cwd)}" maxlength="80" value="${esc(card.alias || '')}" placeholder="${esc(card.machineLabel || card.label)} · Enter saves · empty clears · Esc cancels">`;
+  if (aliasEditing === card.id) {
+    return `<input class="alias-input" data-cwd="${esc(card.cwd)}" data-id="${esc(card.id)}" maxlength="80" value="${esc(card.alias || '')}" placeholder="${esc(card.machineLabel || card.label)} · Enter saves · empty clears · Esc cancels">`;
   }
   const machine = card.alias && card.machineLabel && card.machineLabel !== card.label
     ? `<span class="affil affil-machine" title="${esc(card.machineLabel)}">${esc(card.machineLabel)}</span>`
@@ -2247,8 +2248,8 @@ document.addEventListener('click', async (ev) => {
   const renameBtn = ev.target.closest('.rename-control');
   if (renameBtn) {
     const cwd = renameBtn.dataset.cwd;
-    if (!cwd) return;
-    aliasEditing = cwd;
+    if (!cwd || !renameBtn.dataset.id) return;
+    aliasEditing = renameBtn.dataset.id;
     if (renameBtn.dataset.id) expanded.add(renameBtn.dataset.id); // a thin row expands to show the editor
     render();
     const input = document.querySelector('.alias-input');
@@ -2317,7 +2318,14 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter') {
     const v = input.value.trim().slice(0, 80);
     aliasEditing = null;
-    setField(input.dataset.cwd, { alias: v || null }, c => { c.alias = v || null; c.label = v || c.machineLabel || c.label; });
+    // The alias names ONE window: the patch carries the window id and only
+    // that card is renamed on the page.
+    const id = input.dataset.id || '';
+    const ws = id.split(':')[0];
+    setField(input.dataset.cwd, { alias: v || null, ws }, c => {
+      if (String(c.id || '').split(':')[0] !== ws) return;
+      c.alias = v || null; c.label = v || c.machineLabel || c.label;
+    });
   } else if (ev.key === 'Escape') {
     aliasEditing = null;
     render();
