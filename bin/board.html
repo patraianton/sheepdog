@@ -235,9 +235,12 @@
     scrollbar-width: thin;
     scrollbar-color: #32465a #0a1017;
   }
+  /* Four lanes; the Focus lane (always first) is twice as wide as the others
+     and lays its cards two abreast — a deep single stack of full cards was
+     what made the morning look like scrolling (operator, 2026-09-06). */
   #board.kanban {
     display: grid;
-    grid-template-columns: repeat(5, minmax(220px, 1fr));
+    grid-template-columns: minmax(440px, 2fr) repeat(3, minmax(220px, 1fr));
     align-items: stretch;
     gap: 8px;
     padding: 8px 10px 12px;
@@ -336,6 +339,13 @@
     scrollbar-width: thin;
     scrollbar-color: #2f4356 transparent;
   }
+  .column-list[data-column="focus"] {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    align-items: start;
+  }
+  .column-list[data-column="focus"] .lane-empty { grid-column: 1 / -1; }
   /* An empty lane says what would fill it — the empty Focus lane is the
      morning's cue, not dead space. */
   .lane-empty {
