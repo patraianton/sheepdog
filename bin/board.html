@@ -443,28 +443,31 @@
     font-weight: 700;
   }
   .label-stack { min-width: 0; }
+  /* The window name is never cut: it wraps onto as many lines as it needs
+     (a long single token breaks mid-word) and the card grows. An operator
+     who reads "bot-manag…" cannot tell which window it is. */
   .session-label {
     display: block;
-    overflow: hidden;
+    min-width: 0;
     color: var(--ink);
     font-family: var(--ui);
     font-size: 13px;
     font-weight: 900;
     letter-spacing: .015em;
     line-height: 1.12;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .affil {
     display: block;
+    min-width: 0;
     margin-top: 3px;
-    overflow: hidden;
     color: var(--ink-dim);
     font-family: var(--telemetry);
     font-size: 7.5px;
     letter-spacing: .025em;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   /* Distinct shapes of belonging: a tab names its main window, a linked
      worktree names its parent repo (TREE), a plain checkout its repo (REPO).
@@ -806,30 +809,32 @@
     font-weight: 700;
   }
   .compact-main { min-width: 0; }
+  /* Thin rows too: the name wraps and the row grows rather than ending in
+     an ellipsis — the signals on the right keep their column regardless. */
   .compact-label {
     display: block;
-    overflow: hidden;
+    min-width: 0;
     color: #cbd6df;
     font-family: var(--ui);
     font-size: 11px;
     font-weight: 850;
     line-height: 1.05;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   /* The base line is always there, empty or not: with it, every name in the
      column sits on the same baseline instead of riding 4px high on the rows
      that happen to carry a repo. It costs no height — the row keeps its 26px. */
   .compact-repo {
     display: block;
+    min-width: 0;
     min-height: 8px;
     margin-top: 1px;
-    overflow: hidden;
     color: #536779;
     font-family: var(--telemetry);
     font-size: 6.5px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   /* Worktree affiliation reads differently from window affiliation on full
      and compact cards alike (declared after .compact-repo so it wins there). */
@@ -1139,22 +1144,22 @@
   .misc-identity { border-right: 1px solid #263747; }
   .misc-identity strong {
     display: block;
-    overflow: hidden;
+    min-width: 0;
     font-family: var(--ui);
     font-size: 12px;
     font-weight: 900;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .misc-identity small {
     display: block;
+    min-width: 0;
     margin-top: 3px;
-    overflow: hidden;
     color: var(--ink-dim);
     font-family: var(--telemetry);
     font-size: 7px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .misc-content { align-self: center; }
   .misc-title, .misc-note {
@@ -1203,7 +1208,7 @@
     .alarm-annunciator { font-size: 8px; letter-spacing: .06em; }
     /* A narrow column tightens the strip, it does not empty it: the flag, the
        star, the priority and the age stay — only the reserved empty slots are
-       given up, so the signals pack tight and the name takes the ellipsis. */
+       given up, so the signals pack tight and the name wraps onto more lines. */
     .compact-grid { grid-template-columns: 16px 22px minmax(0, 1fr) auto auto; gap: 3px; }
     .signal { min-width: 15px; height: 15px; padding: 0 2px; }
     .signal.slot-empty { display: none; }
