@@ -478,6 +478,26 @@
   .affil-window::before { content: "WINDOW / "; color: #425467; }
   .affil-tree::before { content: "TREE / "; color: #3d5a50; }
   .affil-repo::before { content: "REPO / "; color: #425467; }
+  /* A renamed card keeps its machine name in view right under the alias:
+     the alias is the operator's word, the binding to the window is herdr's. */
+  .affil-machine::before { content: "WINDOW · "; color: #425467; }
+  .alias-input {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 2px 5px;
+    background: #10161f;
+    border: 1px solid #60778c;
+    border-radius: 2px;
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+  .alias-input:focus { outline: none; border-color: var(--focus); }
+  .control.alias-on { color: var(--focus); border-color: #2f5f6e; }
 
   .control-rack {
     display: flex;
@@ -1407,6 +1427,8 @@ let pendingOffTimer = null;
 // cwd whose note is being typed right now; repaints hold off so the input
 // (and the text in it) survives the 3-second refresh cycle.
 let noteEditing = null;
+// cwd whose alias (the card's hand-given name) is being typed right now.
+let aliasEditing = null;
 const expanded = new Set();
 
 function esc(value) {
@@ -1600,9 +1622,11 @@ function sameName(a, b) {
 // repo (TREE /). The only thing never printed is the card's own name again.
 function affiliation(card) {
   const out = [];
-  const win = card.wsLabel && !sameName(card.wsLabel, card.label) ? card.wsLabel : '';
+  // Belonging is judged against the machine name: an alias never hides it.
+  const own = card.machineLabel || card.label;
+  const win = card.wsLabel && !sameName(card.wsLabel, own) ? card.wsLabel : '';
   if (win) out.push({ kind: 'window', text: win });
-  if (card.repo && !sameName(card.repo, card.label) && !(win && sameName(card.repo, win))) {
+  if (card.repo && !sameName(card.repo, own) && !(win && sameName(card.repo, win))) {
     // "tree" = a linked worktree of the repo; a plain checkout in the repo
     // itself gets the neutral REPO / mark instead.
     out.push({ kind: card.tree ? 'tree' : 'repo', text: card.repo });
@@ -1657,6 +1681,24 @@ function noteControl(card) {
   return `<button type="button" class="control note-control ${card.note ? 'note-on' : 'unset'}" data-cwd="${esc(card.cwd)}" data-id="${esc(card.id)}" title="${card.note ? 'Edit the note' : 'Add a note'}">⚑</button>`;
 }
 
+// Rename = an alias for the CARD only: the window keeps its herdr name, the
+// folder binding does not move, and the machine name stays printed under it.
+function renameControl(card) {
+  return `<button type="button" class="control rename-control ${card.alias ? 'alias-on' : 'unset'}" data-cwd="${esc(card.cwd)}" data-id="${esc(card.id)}" title="Rename the card (board only)">✎</button>`;
+}
+
+// The card's name: the alias input while renaming, else the label with the
+// machine name right under it when the two differ.
+function nameBlock(card) {
+  if (aliasEditing === card.cwd) {
+    return `<input class="alias-input" data-cwd="${esc(card.cwd)}" maxlength="80" value="${esc(card.alias || '')}" placeholder="${esc(card.machineLabel || card.label)} · Enter saves · empty clears · Esc cancels">`;
+  }
+  const machine = card.alias && card.machineLabel && card.machineLabel !== card.label
+    ? `<span class="affil affil-machine" title="${esc(card.machineLabel)}">${esc(card.machineLabel)}</span>`
+    : '';
+  return `<span class="session-label" title="${esc(card.cwd || card.label)}">${esc(card.label)}</span>${machine}`;
+}
+
 function noteStrip(card) {
   if (noteEditing === card.cwd) {
     return `<div class="operator-note editing"><span class="note-callout">Note</span><input class="note-input" data-cwd="${esc(card.cwd)}" maxlength="300" value="${esc(card.note || '')}" placeholder="Enter saves · empty clears · Esc cancels"></div>`;
@@ -1672,7 +1714,7 @@ function controlRack(card, allowCollapse) {
     ? `<button type="button" class="control expand-control" data-expand="${esc(card.id)}" title="Collapse to a thin row">▴</button>`
     : '';
   if (!card.cwd) return `<div class="control-rack">${collapse}${power}${focusControl()}</div>`;
-  return `<div class="control-rack">${collapse}${typeControl(card)}${starControl(card)}${prioControl(card)}${dateControl(card)}${noteControl(card)}${power}</div>`;
+  return `<div class="control-rack">${collapse}${typeControl(card)}${starControl(card)}${prioControl(card)}${dateControl(card)}${noteControl(card)}${renameControl(card)}${power}</div>`;
 }
 
 function fullCard(card, columnKey) {
@@ -1721,7 +1763,7 @@ function fullCard(card, columnKey) {
         <div class="identity">
           <span class="tail-number">#${card.number ?? '·'}</span>
           <span class="label-stack">
-            <span class="session-label" title="${esc(card.cwd || card.label)}">${esc(card.label)}</span>
+            ${nameBlock(card)}
             ${aff.map(a => `<span class="affil affil-${a.kind}" title="${esc(a.text)}">${esc(a.text)}</span>`).join('')}
           </span>
         </div>
@@ -1776,8 +1818,12 @@ function compactCard(card, options = {}) {
   // row offering them would store state no view ever shows.
   const mine = viewOf(card) === 'mine';
   const actions = (card.cwd
-    ? (mine ? typeControl(card) : '') + starControl(card) + prioControl(card) + (mine ? dateControl(card) : '') + (mine ? noteControl(card) : '')
+    ? (mine ? typeControl(card) : '') + starControl(card) + prioControl(card) + (mine ? dateControl(card) : '') + (mine ? noteControl(card) : '') + renameControl(card)
     : '') + powerControl(card) + focusControl();
+  // A renamed row still shows its machine name, first in the small line.
+  const machine = card.alias && card.machineLabel && card.machineLabel !== card.label
+    ? `<span class="affil-machine">${esc(card.machineLabel)}</span>`
+    : '';
   // A thin row has no room for the hedge line; its tooltip carries it.
   const hedge = card.agent && !isLive(card) && !card.motion && card.saysWaits ? '&#10;says it waits — nothing running here' : '';
   return `<article class="flight-card compact ${card.status === 'unknown' ? 'unknown-card' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}" title="${esc(card.recap || card.title || card.note || card.label)}${hedge}&#10;Click to jump; arrow expands">
@@ -1785,7 +1831,7 @@ function compactCard(card, options = {}) {
     <div class="compact-grid">
       ${canExpand ? `<button type="button" class="expand-mini" data-expand="${esc(card.id)}" title="Expand idle card">▸</button>` : `<span class="state-lamp ${esc(card.status)}"></span>`}
       <span class="compact-number">#${card.number ?? '·'}</span>
-      <span class="compact-main"><span class="compact-label">${esc(card.label)}</span><span class="compact-repo">${affs.map(a => `<span class="affil-${a.kind}">${esc(a.text)}</span>`).join(' ')}</span></span>
+      <span class="compact-main"><span class="compact-label" title="${esc(card.cwd || card.label)}">${esc(card.label)}</span><span class="compact-repo">${[machine, ...affs.map(a => `<span class="affil-${a.kind}">${esc(a.text)}</span>`)].filter(Boolean).join(' ')}</span></span>
       <span class="compact-right">${lavishChip}<span class="compact-signals">${signals}</span><span class="compact-actions">${actions}</span></span>
       <span class="compact-age">${esc(age(card.since) || '')}</span>
     </div>
@@ -1835,7 +1881,7 @@ function renderKanban(cards) {
 // Team: one row per person — their herdr session plus tracker items.
 function personRow(key, person, cards, used) {
   const normalize = value => String(value ?? '').toLowerCase();
-  const card = cards.find(item => normalize(item.cwd).includes(`\\people\\${key}`) || normalize(item.label) === key);
+  const card = cards.find(item => normalize(item.cwd).includes(`\\people\\${key}`) || normalize(item.label) === key || normalize(item.machineLabel) === key);
   if (card) used.add(card.id);
   const status = card ? card.status : null;
   const lastWorking = card?.lastWorkingAt ? age(card.lastWorkingAt) : null;
@@ -2028,8 +2074,8 @@ async function refresh(force) {
     document.getElementById('error').style.display = 'none';
     const sig = JSON.stringify([fresh.cards, fresh.retire, fresh.team, fresh.lavish,
       fresh.remote, fresh.focusedTab, fresh.windows, fresh.columns]);
-    if (noteEditing) {
-      // A repaint would wipe the note input mid-typing; the fresh data waits.
+    if (noteEditing || aliasEditing) {
+      // A repaint would wipe the note/alias input mid-typing; the fresh data waits.
       updateReadout();
     } else if (force || sig !== lastRenderSig || Date.now() - lastRenderAt > 60_000) {
       lastRenderSig = sig;
@@ -2178,8 +2224,19 @@ document.addEventListener('click', async (ev) => {
     setField(prio.dataset.cwd, { prio: next }, c => { c.prio = next; });
     return;
   }
-  // A click inside the note input is typing, not a jump to the tab under it.
-  if (ev.target.closest('.note-input')) return;
+  // A click inside the note or alias input is typing, not a jump to the tab under it.
+  if (ev.target.closest('.note-input, .alias-input')) return;
+  const renameBtn = ev.target.closest('.rename-control');
+  if (renameBtn) {
+    const cwd = renameBtn.dataset.cwd;
+    if (!cwd) return;
+    aliasEditing = cwd;
+    if (renameBtn.dataset.id) expanded.add(renameBtn.dataset.id); // a thin row expands to show the editor
+    render();
+    const input = document.querySelector('.alias-input');
+    if (input) { input.focus(); input.select(); }
+    return;
+  }
   const noteBtn = ev.target.closest('.note-control, [data-note-edit]');
   if (noteBtn) {
     const cwd = noteBtn.dataset.cwd || noteBtn.dataset.noteEdit;
@@ -2234,10 +2291,27 @@ document.addEventListener('keydown', (ev) => {
     render();
   }
 });
+// The alias editor follows the same contract: Enter saves (empty clears the
+// alias, the card falls back to its machine name), Esc or clicking away cancels.
+document.addEventListener('keydown', (ev) => {
+  const input = ev.target && ev.target.classList?.contains('alias-input') ? ev.target : null;
+  if (!input) return;
+  if (ev.key === 'Enter') {
+    const v = input.value.trim().slice(0, 80);
+    aliasEditing = null;
+    setField(input.dataset.cwd, { alias: v || null }, c => { c.alias = v || null; c.label = v || c.machineLabel || c.label; });
+  } else if (ev.key === 'Escape') {
+    aliasEditing = null;
+    render();
+  }
+});
 document.addEventListener('focusout', (ev) => {
   if (ev.target && ev.target.classList?.contains('note-input')) {
     // Give a same-instant Enter keydown a beat to win before the cancel.
     setTimeout(() => { if (noteEditing) { noteEditing = null; render(); } }, 150);
+  }
+  if (ev.target && ev.target.classList?.contains('alias-input')) {
+    setTimeout(() => { if (aliasEditing) { aliasEditing = null; render(); } }, 150);
   }
 });
 

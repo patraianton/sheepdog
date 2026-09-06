@@ -40,6 +40,15 @@ forty windows do I sit down with today, and is everything else fine?
   pane, only on your word — `--record-only` skips the send); `note`, `done`
   and `clear` keep the card's plan honest. The plan lives in
   `state/plan.json`, one entry per folder.
+- **A card can be renamed — the window cannot.** `dispatch rename <window>
+  "<alias>"` (or the ✎ button in the card's rack) gives the CARD a name you
+  will remember ("Promo fix" instead of `fix/promo-f-2026-09-06`). The alias
+  is board-only: it lives in `state/projects.json` under that exact folder,
+  is never inherited by subfolders and never touches herdr — the window keeps
+  its own name, printed in a small line under the alias so the binding stays
+  visible. The brief prints `#42 Promo fix (fix/promo-f-2026-09-06)`, and
+  every `dispatch` command accepts either name. An empty alias (or `none`)
+  clears it.
 - **Check-back dates.** A card can carry "check on DD.MM" (presets +3 d /
   +1 week / +2 weeks). On the day the card says so — on a focus or ongoing
   window as its on-you reason, on any other as its own strip.
@@ -86,9 +95,10 @@ forty windows do I sit down with today, and is everything else fine?
 - **The only manual input** is what herdr cannot know: the lane (◎ focus /
   ∞ ongoing / ✚ tool / · unsorted), priority (P1/P2/P3), a life-direction
   tag for color-coding, a "must not stop" star (an ongoing window that goes
-  quiet with a star on it alarms), a check-back date and a short note. All
-  of it is set by clicking on the card and stored in `state/projects.json`,
-  keyed by the session's working directory.
+  quiet with a star on it alarms), a check-back date, a short note and an
+  alias (the card's own display name; the window itself is never renamed).
+  All of it is set by clicking on the card and stored in
+  `state/projects.json`, keyed by the session's working directory.
 - **Power button on a card** (⏻, asks "sure?") tells the session to save
   everything important to the project's memory and commit, waits for it to
   finish, logs the window to `state/closed.jsonl`, then closes it. If the
