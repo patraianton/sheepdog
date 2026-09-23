@@ -22,7 +22,7 @@ appended after the text. `--cwd` defaults to the captain's own directory.
 ```
 > node bin\teammate.mjs new "Write docs/teammate.md — a field guide to bin/teammate.mjs" --label docs-teammate
 tm-0814-223149  tab w44:t4  pane w44:p4
-  cwd    C:\Users\panto\.herdr\worktrees\process-management\teammate
+  cwd    C:\Users\<user>\.herdr\worktrees\process-management\teammate
   brief  ...\state\teammates\tm-0814-223149.brief.md
   status ...\state\teammates\tm-0814-223149.status
 
@@ -45,7 +45,7 @@ back at once, because a lease nobody uses starves the pool.
 ```
 > node bin\teammate.mjs new "Fix the flaky date test" --tree
 tm-0814-231502  tab w44:t5  pane w44:p5
-  cwd    C:\Users\panto\.treehouse\teammate-1cffa2\2\teammate
+  cwd    C:\Users\<user>\.treehouse\teammate-1cffa2\2\teammate
   branch tm-0814-231502  (pooled worktree, lease 3f6b0a1c)
   brief  ...\state\teammates\tm-0814-231502.brief.md
   status ...\state\teammates\tm-0814-231502.status
@@ -81,7 +81,7 @@ unless `--all`. A `!` in the first column means "wants the captain".
 > node bin\teammate.mjs list
 ! tm-0814-223149  idle        3m  Write docs/teammate.md — a field guide to bin/teammate.mjs
       done: docs/teammate.md written and verified
-      w44:p4  C:\Users\panto\.herdr\worktrees\process-management\teammate
+      w44:p4  C:\Users\<user>\.herdr\worktrees\process-management\teammate
 ```
 
 ### `check [--json]`
@@ -102,7 +102,7 @@ hit an error — so it drops straight into a script or a hook.
 > node bin\teammate.mjs check
 ! tm-0814-223149  worker says needs-decision
     said: needs-decision: keep the examples in PowerShell or plain cmd?
-    pane w44:p4  cwd C:\Users\panto\.herdr\worktrees\process-management\teammate
+    pane w44:p4  cwd C:\Users\<user>\.herdr\worktrees\process-management\teammate
     read: node bin\teammate.mjs log tm-0814-223149
 ```
 
