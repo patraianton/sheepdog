@@ -1576,8 +1576,8 @@ function shortDate(iso) {
 }
 
 // The lane is the operator's filing, nothing else: a card never moves by
-// itself (operator's rewrite, 2026-09-05 — "the board assigns what is
-// done, it does not watch what happens"). What the machine sees is said ON
+// itself (rewrite of 2026-09-05: the board keeps the lane you chose and
+// never moves a card by what it sees). What the machine sees is said ON
 // the card: the on-you strip, the live banner, the motion strip.
 function laneOf(card) {
   if (card.type === 'focus') return 'focus';
@@ -1841,9 +1841,9 @@ function fullCard(card, columnKey) {
     `<div class="system-strip lavish" data-lavish-url="${esc(a.url)}" title="Open the review page in the browser">
       <b>◈ LAVISH</b><span>${esc(a.name)}${a.pending ? ' · reply queued' : ' · awaiting your review'}</span></div>`).join('');
   // One task line: the herdr state lamp plus the recap of what the session
-  // is actually doing. The session's self-written title is not shown — "I
-  // don't need what the session called its task, I need the current recap"
-  // (operator, 2026-08-20).
+  // is actually doing. The session's self-written title is not shown: what
+  // the session is doing now matters more than what it named its task
+  // (2026-08-20).
   const taskLine = card.recap
     ? `<div class="task-readout"><span class="state-lamp ${esc(card.status)}"></span><span class="task-copy" title="${esc(card.recap)}">${esc(card.recap)}</span></div>`
     : '';
