@@ -11,6 +11,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFacts, journalFacts, decideMotion, staleWorking, SAYS_WAITS } from './session-facts.mjs';
 
+// Prompt-cache clock (minutes). A Claude session's prompt cache lives 1 h
+// after its last request; the board warns CACHE_WARN_MIN before it goes cold.
+const CACHE_TTL_MIN = Number(process.env.SHEEPDOG_CACHE_TTL_MIN) || 60;
+const CACHE_WARN_MIN = Number(process.env.SHEEPDOG_CACHE_WARN_MIN) || 10;
+
 const PORT = 4877;
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const STATE_DIR = path.join(ROOT, 'state');
@@ -831,6 +836,10 @@ async function collect() {
       staleWorking: p.stale_working === true,
       strayTask: procs?.stray ? { label: procs.stray.label, cmd: procs.stray.cmd } : null,
       lastLineAt: journal?.lastLineAt ? new Date(journal.lastLineAt).toISOString() : null,
+      // cacheWarmAt = the session's newest own turn (user/assistant line): the
+      // last request that refreshed its prompt cache. The page counts the
+      // 1-hour TTL down from it and raises the cache strip near the end.
+      cacheWarmAt: journal?.lastTurnAt ? new Date(journal.lastTurnAt).toISOString() : null,
       agent: p.agent ?? null,
       since: seen[`${cwd}|${p.agent_status}`]?.since ?? null,
     };
@@ -860,6 +869,9 @@ async function collect() {
     // The fact sweep's own health: when it is down or silently blind the page
     // says so — a quiet fleet and a broken sweep must never look the same.
     facts: facts.health(),
+    // Prompt-cache clock: TTL of the Anthropic prompt cache and how many
+    // minutes before it expires the page must raise the card and notify.
+    cache: { ttlMin: CACHE_TTL_MIN, warnMin: CACHE_WARN_MIN },
     lavish: {
       ok: lavishState.ok,
       // Count what the board actually shows: blockers on cards plus loose

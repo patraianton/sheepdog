@@ -772,7 +772,7 @@
 
   .telemetry {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 5px;
     min-width: 0;
     margin-top: 6px;
@@ -807,6 +807,19 @@
   .datum.vector span { color: color-mix(in srgb, var(--dir-color) 68%, #fff); }
   .datum.age span.hot { color: var(--done); }
   .datum.age span.vhot { color: var(--blocked); }
+  /* Prompt-cache clock: minutes left before the session's 1-hour prompt cache
+     goes cold. Warm = plain, warn = red (the operator has ~10 min to send a
+     warmer), cold = dim. */
+  .datum.cache span.cache-warn { color: var(--blocked); font-weight: 900; }
+  .datum.cache span.cache-cold { color: #506579; }
+  .flight-card.cache-warn-card {
+    border-color: var(--blocked);
+    box-shadow: 0 0 0 1px #ff5c5f55, 0 4px 14px #0006;
+    background: color-mix(in srgb, var(--blocked) 9%, #121a24);
+  }
+  .signal.cache { color: #ff9da0; border-color: #7b3c43; min-width: 34px; font-variant-numeric: tabular-nums; }
+  .view-tab.bell.on { color: #ffd166; }
+  .view-tab.bell.denied { color: var(--blocked); }
 
   /* Compact Idle flight strips. */
   /* Compact idle strips: thin content-first rows. The direction color moves to
@@ -1428,6 +1441,13 @@ const TYPE_GLYPH = { focus: '◎', ongoing: '∞', tool: '✚' };
 const VIEWS = ['mine', 'team', 'other'];
 const VIEW_LABELS = { mine: 'Mine', team: 'Team', other: 'Other' };
 const PULSE_MS = 15 * 60 * 1000;
+// Prompt-cache clock. The server says the TTL and the warning window; the
+// page counts down from each session's last own turn (cacheWarmAt). Red and
+// the browser notification are raised only for the windows the operator
+// keeps warm on purpose: the Focus lane and starred cards. Every other card
+// only shows the number.
+let notify = localStorage.getItem('board-notify') === '1';
+const notified = new Map(); // card id -> cacheWarmAt already announced
 
 let data = null;
 let NOW = Date.now();
@@ -1469,6 +1489,58 @@ function age(sinceIso) {
   if (minutes < 60) return `${minutes} min`;
   if (minutes < 48 * 60) return `${Math.round(minutes / 60)} h`;
   return `${Math.round(minutes / 60 / 24)} d`;
+}
+
+function cacheClock(card) {
+  if (!card.agent || !card.cacheWarmAt) return null;
+  const ttl = (data.cache?.ttlMin ?? 60) * 60000;
+  const warn = (data.cache?.warnMin ?? 10) * 60000;
+  const left = new Date(card.cacheWarmAt).getTime() + ttl - NOW;
+  const minutes = Math.max(0, Math.ceil(left / 60000));
+  // A working session refreshes its own cache with every request.
+  const level = card.status === 'working' ? 'live' : left <= 0 ? 'cold' : left <= warn ? 'warn' : 'warm';
+  return { minutes, level, warmAt: card.cacheWarmAt };
+}
+
+// Which cards may go red and ring: today's few and the starred ones.
+function cacheWatched(card) {
+  return card.type === 'focus' || Boolean(card.star);
+}
+
+function cacheWords(clock) {
+  if (!clock) return '—';
+  if (clock.level === 'live') return 'live';
+  if (clock.level === 'cold') return 'cold';
+  return `${clock.minutes} min`;
+}
+
+function cacheDatum(card) {
+  const clock = cacheClock(card);
+  if (!clock) return '';
+  const cls = clock.level === 'warn' && cacheWatched(card) ? 'cache-warn' : clock.level === 'cold' ? 'cache-cold' : '';
+  const tip = clock.level === 'live' ? 'The session is working — every request refreshes its prompt cache'
+    : clock.level === 'cold' ? 'The prompt cache has expired; the next turn rebuilds it'
+    : `Prompt cache goes cold in ${clock.minutes} min — a warmer message keeps it`;
+  return `<span class="datum cache" title="${esc(tip)}"><b>Cache</b><span class="${cls}">${esc(cacheWords(clock))}</span></span>`;
+}
+
+// Browser notification for a watched card entering the warning window —
+// once per warm-up (the same warmAt never rings twice). Needs the bell in
+// the header switched on, which is where the permission is asked.
+function ringCache(cards) {
+  if (!notify || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  for (const card of cards) {
+    if (!cacheWatched(card)) continue;
+    const clock = cacheClock(card);
+    if (!clock || clock.level !== 'warn') continue;
+    if (notified.get(card.id) === clock.warmAt) continue;
+    notified.set(card.id, clock.warmAt);
+    const n = new Notification(`Cache: ${card.label} — ${clock.minutes} min left`, {
+      body: 'Send a warmer message or the session rebuilds its prompt cache from scratch.',
+      tag: `cache-${card.id}`,
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+  }
 }
 
 function hasPulse(card) {
@@ -1750,6 +1822,7 @@ function fullCard(card, columnKey) {
   const focused = Boolean(card.tabId && card.tabId === data.focusedTab);
   const retire = data.retire?.[card.tabId];
   const aff = affiliation(card);
+  const cacheWarn = cacheWatched(card) && cacheClock(card)?.level === 'warn';
   const pulseMinutes = card.lastWorkingAt ? Math.round((NOW - new Date(card.lastWorkingAt).getTime()) / 60000) : null;
   const remoteLine = card.remote
     ? `<div class="system-strip"><b>REMOTE</b><span>agent active on second machine</span></div>`
@@ -1775,7 +1848,7 @@ function fullCard(card, columnKey) {
     ? `<div class="task-readout"><span class="state-lamp ${esc(card.status)}"></span><span class="task-copy" title="${esc(card.recap)}">${esc(card.recap)}</span></div>`
     : '';
 
-  return `<article class="flight-card ${card.status === 'unknown' ? 'unknown-card' : ''} ${alarm ? 'alarm-card' : ''} ${liveStar ? 'star-live' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" title="Click to jump to this herdr tab" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}">
+  return `<article class="flight-card ${card.status === 'unknown' ? 'unknown-card' : ''} ${alarm ? 'alarm-card' : ''} ${cacheWarn ? 'cache-warn-card' : ''} ${liveStar ? 'star-live' : ''} ${focused ? 'focused' : ''}" data-tab="${esc(card.tabId || '')}" title="Click to jump to this herdr tab" style="${stateStyle(card.status)};--dir-color:${dirColor(card.dir) || '#3b4d60'}">
     ${focused ? `<div class="focus-banner"><span>You are here</span><span>focused herdr tab</span></div>` : ''}
     <div class="card-body">
       <div class="card-head">
@@ -1803,6 +1876,7 @@ function fullCard(card, columnKey) {
       ${lavishLines}
       <div class="telemetry">
         <span class="datum vector"><b>Direction</b><span title="${esc(card.dir || 'unassigned')}">${esc(card.dir || 'unassigned')}</span></span>
+        ${cacheDatum(card)}
         <span class="datum age"><b>Stuck</b><span class="${ageClass}">${esc(displayedAge || '—')}</span></span>
       </div>
     </div>
@@ -1822,7 +1896,11 @@ function compactCard(card, options = {}) {
   const lavishChip = (card.lavish ?? []).length
     ? `<span class="signal lavish" data-lavish-url="${esc(card.lavish[0].url)}" title="Lavish review: ${esc(card.lavish.map(a => a.name).join(', '))}">◈</span>`
     : '';
+  const cacheChip = cacheWatched(card) && cacheClock(card)?.level === 'warn'
+    ? `<span class="signal cache" title="Prompt cache goes cold in ${cacheClock(card).minutes} min — send a warmer">⌛${cacheClock(card).minutes}m</span>`
+    : '';
   const signals = [
+    cacheChip,
     card.status === 'unknown' ? `<span class="signal noagent" title="No agent in this window — bring the session back">○</span>` : '',
     card.paused ? `<span class="signal paused" title="${esc(pauseWords(card))}">⛔</span>` : '',
     card.laneOver ? `<span class="signal lane-over" title="${esc(laneOverWords(card))}">⚑</span>` : '',
@@ -1994,7 +2072,8 @@ function renderHeader(allViewCards) {
   for (const card of data.cards) counts[viewOf(card)] = (counts[viewOf(card)] ?? 0) + 1;
   const onYouCount = data.cards.filter(card => card.onYou && viewOf(card) === 'mine').length;
   document.getElementById('views').innerHTML = VIEWS.map(key => `<button type="button" class="view-tab ${key === view ? 'on' : ''}" data-view="${key}" aria-pressed="${key === view}"><span>${VIEW_LABELS[key]}</span><span class="count">${counts[key] || 0}</span></button>`).join('')
-    + `<button type="button" class="view-tab deep-toggle ${onlyOnYou ? 'on' : ''}" id="onyou" aria-pressed="${onlyOnYou}" title="Only the cards waiting for your word, in their lanes"><span>◆ On you</span><span class="count">${onYouCount}</span></button>`;
+    + `<button type="button" class="view-tab deep-toggle ${onlyOnYou ? 'on' : ''}" id="onyou" aria-pressed="${onlyOnYou}" title="Only the cards waiting for your word, in their lanes"><span>◆ On you</span><span class="count">${onYouCount}</span></button>`
+    + `<button type="button" class="view-tab bell ${notify ? 'on' : ''} ${typeof Notification !== 'undefined' && Notification.permission === 'denied' ? 'denied' : ''}" id="bell" aria-pressed="${notify}" title="${typeof Notification !== 'undefined' && Notification.permission === 'denied' ? 'Notifications are blocked for this site in Chrome — allow them in the address-bar site settings' : 'Ring a browser notification when a Focus or starred session is about to lose its prompt cache'}"><span>${notify ? '🔔' : '🔕'} Cache</span></button>`;
 
   const filters = document.getElementById('filters');
   if (view === 'mine') {
@@ -2091,6 +2170,8 @@ async function refresh(force) {
     }
     data = fresh;
     document.getElementById('error').style.display = 'none';
+    NOW = Date.now();
+    ringCache(fresh.cards);
     const sig = JSON.stringify([fresh.cards, fresh.retire, fresh.team, fresh.lavish,
       fresh.remote, fresh.focusedTab, fresh.windows, fresh.columns]);
     if (noteEditing || aliasEditing) {
@@ -2149,6 +2230,19 @@ document.addEventListener('click', async (ev) => {
   if (lavish) {
     ev.stopPropagation();
     window.open(lavish.dataset.lavishUrl, '_blank');
+    return;
+  }
+  const bell = ev.target.closest('#bell');
+  if (bell) {
+    if (typeof Notification === 'undefined') return;
+    if (notify) { notify = false; }
+    else {
+      // Permission can only be asked from a click — this is that click.
+      const ok = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      notify = ok === 'granted';
+    }
+    localStorage.setItem('board-notify', notify ? '1' : '');
+    render();
     return;
   }
   const onYouBtn = ev.target.closest('#onyou');
