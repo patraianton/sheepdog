@@ -473,7 +473,10 @@ async function settleLaunch(paneId, ms = 60000) {
       return { problem: 'that Claude is not logged in (the tab did not inherit an account)' };
     }
     if (!trusted && /trust (this|the) folder|Is this a project you created or one you trust/i.test(screen)) {
-      await herdrText(['pane', 'send-keys', paneId, 'Enter']); // option 1, "yes, I trust it", is preselected
+      // Since Claude Code 2.x the preselected option is "No, exit": move down to "Yes, I trust this folder" first.
+      await herdrText(['pane', 'send-keys', paneId, 'Down']);
+      await new Promise(r => setTimeout(r, 300));
+      await herdrText(['pane', 'send-keys', paneId, 'Enter']);
       trusted = true;
       continue;
     }
