@@ -189,8 +189,7 @@ const queuedRecapFiles = new Set();
 let recapPumpBusy = false;
 
 // Recap lines survive a server restart on disk. Without this every restart
-// wiped the cache and the whole fleet got re-summarised at once from scratch
-// (operator, 2026-08-21: "every time I look, everything is wrong").
+// wiped the cache and the whole fleet got re-summarised at once from scratch.
 // The model writes ONLY the recap line. Until 2026-08-22 it also issued a
 // who-does-the-session-wait-on verdict that decided the Running-⏳ column;
 // a review panel showed the text could not carry that (a sentence from the
