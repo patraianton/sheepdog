@@ -1,207 +1,251 @@
 # sheepdog
 
-A live kanban board that herds your coding-agent fleet.
+A live kanban board and dispatcher for a fleet of coding-agent sessions. It
+runs on Microsoft Windows under Node.js and needs no extra packages. In daily
+use since August 2026.
 
-## What it is
+sheepdog is a local kanban board for one person who runs dozens of Claude Code
+and Codex sessions in [herdr](https://herdr.dev), a program that runs many
+coding-agent sessions side by side. herdr shows each session in a window, and
+a window can hold several tabs, each with its own session. On 6 August 2026,
+just before sheepdog was written, the owner's fleet held 44 herdr windows
+(`docs/herdr-api.md`).
 
-sheepdog is a local web board for people who run many parallel coding-agent
-sessions inside [herdr](https://herdr.dev). It reads the live state of every
-session straight from herdr, and lets you *assign* what the fleet does
-rather than just watch it. The morning question it answers: which of these
-forty windows do I sit down with today, and is everything else fine?
+The board gives every session one card. It reads the live state of each
+session from herdr, lets you file each project folder into a lane by hand, and
+raises one verdict per card: whether the next step is on you. It replaces the
+morning round through all those windows with one page that says which
+sessions need you and that everything else is fine. A second Claude Code
+session beside it, the dispatcher, reads the whole board as one page of text
+and writes decisions back.
 
-- **Card = session.** One open agent session, one card. Nothing is merged or
-  entered by hand — herdr is the source of truth.
-- **Lanes are filed by hand, never inferred.** You file each window into
-  one of three lanes, and a card never moves by itself:
-  *Focus — today* (the few windows you work with today; full cards, each
-  carrying the task it was launched on), *Ongoing* (built, runs, watched:
-  thin quiet rows that open up only when something is on you), *Tools*
-  (fix-it windows; an alphabetical jump list, never an alarm). Everything
-  unfiled sits in *Unsorted* until you file it — filing is the only thing an
-  unsorted window asks of you. The raw herdr state stays on every card as
-  a lamp.
-- **"On you" is the one verdict the board raises itself.** A card gets a
-  ◆ ON YOU strip with its reason when nothing but you can move it — and
-  what counts depends on the lane: a focus window that stopped ("next step
-  is yours", or "no task launched yet"), a focus window with no agent, a
-  blocked session, an open review page, an arrived check-back date, a
-  usage-limit stop, a lane that ended on the second machine, a starred
-  ongoing window gone silent. Alarms (something that must run does not)
-  are red; asks are magenta. A header toggle shows only the on-you cards,
-  in their lanes; its counter is the number to look at in the morning.
-- **The dispatcher's brief.** `GET /brief` (or `node bin\dispatch.mjs brief`)
-  prints the whole fleet as one page of plain text — on-you first, then
-  focus with each window's task and last words, ongoing, tools, unsorted —
-  so the agent sitting next to you reads one page instead of forty
-  windows. `dispatch type <window> focus|ongoing|tool|none` files a window;
-  `dispatch launch <window> "<task>"` records the task on the card and
-  sends it into the session (`herdr agent prompt`; only from inside a herdr
-  pane, only on your word — `--record-only` skips the send); `note`, `done`
-  and `clear` keep the card's plan honest. The plan lives in
-  `state/plan.json`, one entry per folder.
-- **A card can be renamed — the window cannot.** `dispatch rename <window>
-  "<alias>"` (or the ✎ button in the card's rack) gives the CARD a name you
-  will remember ("Promo fix" instead of `fix/promo-f-2026-09-06`). The alias
-  is board-only: it lives in `state/projects.json` under that exact folder,
-  keyed by the herdr window id (two windows on one folder are two cards with
-  two names), is never inherited by subfolders and never touches herdr — the window keeps
-  its own name, printed in a small line under the alias so the binding stays
-  visible. The brief prints `#42 Promo fix (fix/promo-f-2026-09-06)`, and
-  every `dispatch` command accepts either name. An empty alias (or `none`)
-  clears it.
-- **Check-back dates.** A card can carry "check on DD.MM" (presets +3 d /
-  +1 week / +2 weeks). On the day the card says so — on a focus or ongoing
-  window as its on-you reason, on any other as its own strip.
-- **Recap line on live cards.** A small local model (any OpenAI-compatible
-  server; set `SHEEPDOG_RECAP_URL` / `SHEEPDOG_RECAP_MODEL`, default LM
-  Studio at `127.0.0.1:1234`) summarizes each live session's journal tail
-  into one line, in a serial background queue so the board's poll never
-  waits for the GPU. Until a summary exists — or if the model server is
-  down — the card shows the session's last words instead. The model only
-  writes that line; it never decides a column.
-- **Work in motion is a fact, not a sentence.** An idle session counts as
-  running (⏳ EXTERNAL) only when the machine can show something running
-  for it: a live watcher process of that pane (task shells carry the pane
-  id in their environment; one Git Bash `/proc` sweep every 20 s), a
-  pending background workflow/agent on the session's newest turn, a
-  scheduled self-wake-up (⟳ NEXT ROUND), or a codex lane the session
-  launched on the second machine (`ssh <host> … codex exec … TASK-x.md` in
-  its journal) whose process is still listed there (⏳ LANE). When that lane
-  ends while the session stays silent, nothing will ever wake the session
-  (nohup sends no notice): the card gets a ⚑ LANE OVER strip — "the
-  session does not know, wake it" — until the session's next line. The strip names the thing from
-  its own command line ("CI #1101 · watching 7 min"). A vanished watcher
-  gets 20 minutes to re-arm; a killed one ends the wait at once; nothing
-  outlives two hours past the journal's newest line. A session that merely
-  *says* it waits gets a grey hedge line instead of a green strip. If the
-  sweep is down the header says FACTS OFFLINE. A session the harness
-  stopped on its usage limit shows a ⛔ USAGE LIMIT strip — when the limit
-  lifts and whether the session will continue by itself.
-- **Refreshes every 3 seconds.** The "stuck for N h" timer shows how long a
-  card has been sitting in its current state.
-- **Click a card to jump there.** The board focuses that herdr tab; the tab
-  currently focused in herdr is highlighted on the board ("you are here").
-- **Three tabs:** *Mine* (your own work, kanban), *Team* (one row per person,
-  with "waiting on you" counters fed from `state/team.json`), *Other*
-  (windows you explicitly set aside, as a plain list).
-- **A restart empties nothing.** After a herdr restart the windows come back
-  before their agents do; those windows stay on the board as inactive cards
-  (dimmed, marked ○ "no agent") until you bring the sessions back. Every
-  card also names what it belongs to: a tab shows its main window
-  (`WINDOW /`), a linked worktree its parent repo (`TREE /`), a plain
-  checkout its repo (`REPO /`). An auto-named worktree window is titled by
-  the branch checked out in it — the branch is the work; renaming the window
-  by hand overrides that.
-- **The only manual input** is what herdr cannot know: the lane (◎ focus /
-  ∞ ongoing / ✚ tool / · unsorted), priority (P1/P2/P3), a life-direction
-  tag for color-coding, a "must not stop" star (an ongoing window that goes
-  quiet with a star on it alarms), a check-back date, a short note and an
-  alias (the card's own display name; the window itself is never renamed).
-  All of it is set by clicking on the card and stored in
-  `state/projects.json`, keyed by the session's working directory.
-- **Power button on a card** (⏻, asks "sure?") tells the session to save
-  everything important to the project's memory and commit, waits for it to
-  finish, logs the window to `state/closed.jsonl`, then closes it. If the
-  session asks a question instead, closing stops and the board tells you.
+## What it does
 
-## Why
+- **One card per open agent session.** herdr is the source of truth for the
+  agent inside, its title, its folder and its window, and for its state with
+  one correction (see Session facts below); the board adds only what herdr
+  cannot know. A card also says where it belongs, unless that would repeat
+  its own name: the herdr window its tab sits in, and the git repository its
+  folder is part of.
+- **Three lanes, filed by hand.** You file each project folder into one lane,
+  and its subfolders follow unless you file them separately. Unfiled cards
+  wait in *Unsorted*, and a card never changes lane by itself.
 
-One operator, dozens of parallel agent sessions. Past a certain fleet size
-you stop remembering which window is blocked on you, which one finished an
-hour ago, and which one silently died. Any board that needs manual updating
-rots in two days — so this one updates itself and only asks you for the two
-things no tool can know: what matters most, and which part of your life it
-belongs to.
+  | Lane | What goes there | How it shows |
+  |---|---|---|
+  | Focus | The few sessions you work in today | Full cards, each carrying the task it was launched on |
+  | Ongoing | Work that is built and keeps running while you watch | Thin rows that open when something is on you, the session is working or proven busy (see below), or it has just finished |
+  | Tools | Fix-it sessions | An alphabetical jump list that never raises an alarm |
 
-## Quickstart
+- **One verdict the board raises itself: "on you".** A card gets an ON YOU
+  strip with its reason when nothing but you can move it. What counts depends
+  on the lane: a Focus session that stopped, a Focus card with no agent, a
+  blocked session, an open review page (see lavish-axi below), an arrived
+  check-back date, a usage-limit stop, a `codex exec` run the session started
+  on a second computer that has ended, an Ongoing session you starred as
+  "must not stop" that has gone silent. Alarms (something that must run does
+  not) are red; asks (the session waits for your word) are magenta. A header
+  toggle shows only those cards, and its counter is the number to look at
+  first.
+- **A dispatcher brief.** `GET /brief` prints every card on the board's
+  *Mine* view as one page of plain text: on-you cards first, then Focus with
+  each session's task and last words, then Ongoing, Tools and Unsorted. The
+  dispatcher reads that page instead of going through every window and writes
+  decisions back with `bin/dispatch.mjs`: which sessions are today's focus,
+  what each was launched on, what happened since.
+- **An idle session counts as busy only when a process, a counter or a timer
+  proves it.** The proof is a live watcher process of that pane, a background
+  task or helper agent the session started and has not yet collected, a
+  wake-up the session scheduled for itself, or a `codex exec` process on the
+  second computer that the session's own command line started. A card also
+  counts as running while any `codex exec` on the second computer works in a
+  folder that `state/remote-bridge.json` maps to the card's folder. A session
+  that only says it is waiting gets a grey line: "says it waits — nothing
+  running here". When the `codex exec` run the session started on the second
+  computer ends while the session stays silent, the card gets a LANE OVER
+  strip (here *lane* means that Codex run, not a board lane), because nothing
+  will ever wake that session by itself.
+- **A recap line on live cards.** A small local model
+  (`qwen3-4b-instruct-2507` served by LM Studio, by default) summarises the
+  tail of each live session's journal (the `.jsonl` transcript Claude Code
+  writes for every conversation) into one line. The model writes only that
+  line; it never decides a lane or a verdict.
+- **A prompt-cache clock on every full card.** Anthropic's API keeps a stored
+  copy of the conversation (the prompt cache) that makes the next message
+  cheaper and faster; once it expires, the next message pays for the whole
+  conversation again. The API keeps that copy for 5 minutes by default, or
+  for one hour if the client asks for it and pays more for each write.
+  sheepdog assumes one hour after the last request (`SHEEPDOG_CACHE_TTL_MIN`
+  changes that; set it to 5 for a client on the default) and counts that hour
+  down on the card. Focus and starred full cards turn red 10 minutes before
+  the end and, if you switch on the Cache bell in the header, raise a browser
+  notification, so you can send a short message and keep the cache instead
+  of rebuilding it.
+- **A worker agent in its own tab.** `bin/teammate.mjs` lets an agent session
+  hire another one: it opens a tab in its own herdr window, writes the task
+  down as a brief, starts Claude Code there, and reads the worker's one-line
+  status updates from a file, so watching costs no agent tokens. With `--tree`
+  the worker gets its own git worktree (a second checkout of the same
+  repository) leased from a pool that treehouse, a separate CLI, manages, so
+  parallel workers never collide on files.
+- **A card can be renamed without touching the window.** `dispatch rename`
+  gives the card a name you will remember ("Promo fix" instead of a branch
+  name). The alias lives only in the board's state, keyed by the herdr window
+  id, and the window keeps its own name in a small line under the alias.
+- **Cards survive a herdr restart.** After a restart the windows come back
+  before their agents do; those windows stay on the board as dimmed cards
+  marked "no agent" until you bring the sessions back.
 
-Requirements: Windows, Node.js 16+, herdr installed (in `PATH` or in its
-default install folder).
+## How it works
+
+| Piece | Where | What it does |
+|---|---|---|
+| herdr CLI | `herdr api snapshot`, `herdr workspace list`, `herdr agent list` | The server polls these three commands. Together they return, for every pane, the agent kind, its status (`idle` / `working` / `blocked` / `done` / `unknown`), its title, its working directory, its session id and its window, tab and pane ids. |
+| Board server | `bin/board-server.mjs` | A plain Node HTTP server on `127.0.0.1:4877`. It merges herdr state with the files in `state/`, computes the "on you" verdict per card, serves `/data` and `/brief`, and takes writes on `/set`, `/plan`, `/focus` and `/retire`. |
+| Board page | `bin/board.html` | One HTML file that asks `/data` every 3 seconds and repaints only on change. Three views, picked at the top of the page: *Mine* (the kanban), *Team* (one row per person, with "waiting on you" counters from `state/team.json`) and *Other* (sessions you set aside). |
+| Session facts | `bin/session-facts.mjs` | Every 20 seconds one Git Bash pass over `/proc` finds the shells each pane launched (they carry `HERDR_PANE_ID` in their environment). It also reads the session's journal for pending task counters, scheduled wake-ups and the usage-limit line, and it overrides herdr's `working` when the pane's title carries Claude Code's idle marker and the journal has been silent for 2 minutes. A vanished watcher gets 20 minutes to come back; no wait built on a local process or a pending counter outlives 2 hours past the journal's newest line. |
+| Dispatcher | `bin/dispatch.mjs` | `brief`, `type`, `launch`, `note`, `done`, `clear`, `rename`. Every write goes through the board server, so the board and the brief never disagree. The plan lives in `state/plan.json`, one entry per folder. |
+| Teammate | `bin/teammate.mjs` | `new`, `list`, `check`, `wait`, `log`, `say`, `close`. One card, one brief and one status file per worker in `state/teammates/`. `check` exits 1 when a worker wants you, so it drops straight into a script or a hook. |
+| Recap model | any OpenAI-compatible server | Recaps run in a serial background queue with a 2-minute cooldown per journal, so the 3-second poll never waits for the GPU. Default: LM Studio at `127.0.0.1:1234`, model `qwen3-4b-instruct-2507`. Before each recap the server first probes `127.0.0.1:8099` (`SHEEPDOG_RECAP_NIGHT_URL`) for a second local model and asks that one instead when it is up; an explicit `SHEEPDOG_RECAP_URL` switches the probe off. If no server answers, the card shows the session's last words instead. |
+| Second computer | `ssh <alias> pgrep -fl "codex exec"` | Every 5 minutes, while the board is open, the server lists Codex processes on a second computer you reach over ssh and matches them to cards through `state/remote-bridge.json`. Off unless `SHEEPDOG_REMOTE_HOST` is set. |
+| Review pages | [lavish-axi](https://github.com/kunchenguid/lavish-axi) CLI | lavish-axi turns an agent's question into a web page you answer in the browser. Once a minute the server asks it for its open pages and pins each one to the card of its project folder. If the CLI is not installed, the feature stays off. |
+
+herdr does not record how important a folder is, which part of your life it
+belongs to, or how long a session has been in its current state, so sheepdog
+keeps these itself. `state/projects.json` holds one entry per project folder:
+the lane, a priority (P1 to P3), a tag for the part of your life the folder
+belongs to (work, health, side project) that sets the card's colour, a "must
+not stop" star, a check-back date, a note and, per window, an alias. A
+subfolder inherits its parent folder's entry, except the note and the alias.
+`state/seen.json` records when each state was first seen, which is where the
+"stuck for N h" timer comes from. `docs/herdr-api.md` is a field guide to the
+herdr CLI surface: what the board reads, what herdr accepts back, and what it
+does not track.
+
+## What was measured, and what it changed
+
+- Before session facts existed, the recap model judged whether an idle session
+  was waiting on an external system, and a dead CI wait stayed green for
+  22 hours on the strength of its wording. A review panel then compared what
+  12 live sessions said about themselves with what was really running on the
+  machine: no way of reading the sessions' own words got more than 9 of the
+  12 right (`bin/board-server.mjs`). Since then an idle session counts as
+  busy only on a machine fact, such as a live process or a pending counter
+  (commit e19e605, "Work in motion is a fact read off the machine").
+- Four changes went through a review whose only job was to find defects:
+  14 findings on the herdr-restart change (commit 1bc21da), 12 confirmed
+  fixes on the second version of the board (1cb3692), 6 defects in
+  `teammate` confirmed by a 20-agent review (93152b7), and a pass over
+  clipped and overflowing page elements by 5 reviewers working from
+  screenshots (327438e).
+- One `herdr api snapshot` of 44 windows is about 68 KB
+  (`docs/herdr-api.md`), small enough that the server reads the whole fleet
+  on every 3-second poll.
+- Claude Code's own `/recap` summary exists only inside the interactive
+  session: none of 1,960 recent journals on disk stored one, so the board
+  shows the agent's last message instead (`bin/board-server.mjs`).
+
+## Run it
+
+You need Microsoft Windows (the launchers are `.cmd` and `.vbs`, and the
+process sweep runs through Git Bash), Node.js 18 or newer and herdr in `PATH`
+or in its default install folder. There is nothing to install.
 
 ```
 node bin/board-server.mjs --open
 ```
 
-or just run `bin\board.cmd`. The board opens at `http://127.0.0.1:4877`.
+`bin\board.cmd` does the same. The board opens at `http://127.0.0.1:4877`. For
+autostart on Windows logon, create a scheduled task that runs
+`bin\board-hidden.vbs`; it starts the server with no console window.
 
-Optional autostart on Windows logon: create a scheduled task that runs
-`bin\board-hidden.vbs` (starts the server with no console window).
-
-## Optional: pending review pages (lavish-axi)
-
-If you route decisions through [lavish-axi](https://github.com/kunchenguid/lavish-axi)
-review pages instead of reading terminals, the board can show them: while the
-board is open it asks the `lavish-axi` CLI for its open sessions once a minute
-and pins each artifact to the closest card by its project folder — a magenta
-"◈ LAVISH" strip that opens the review page in a new tab, plus a total in the
-header. If the CLI is not installed, the feature stays off silently.
-
-## Optional: watching a second machine
-
-If part of your fleet runs on another computer, the board can poll it over
-ssh (read-only: it lists agent processes) and show a green "agent running on
-second machine" line on the matching cards, so a starred card doesn't raise
-a false alarm while the real work happens elsewhere.
-
-Set the ssh alias of that machine in the environment:
+The dispatcher runs from any terminal.
 
 ```
-SHEEPDOG_REMOTE_HOST=<your-ssh-alias> node bin/board-server.mjs
+node bin\dispatch.mjs brief
+node bin\dispatch.mjs type 12 focus
+node bin\dispatch.mjs launch 12 "Fix the flaky release build"
+node bin\dispatch.mjs rename 12 "Release build"
+node bin\dispatch.mjs done 12
 ```
 
-The mapping "task on the second machine → local project folder" lives in
-`state/remote-bridge.json`. If the variable is not set, the feature is off
-and nothing is polled. By default the board looks for checkouts under
-`Developer/`, `projects/`, `work/` or `src/` on that machine; a `_dirs` array
-in the same file overrides the list.
+A window is named by its herdr number (`#12` or `12`) or by a unique part of
+its card's name. `launch` records the task on the card and sends it into the
+session with `herdr agent prompt`; sending works only from inside a herdr pane,
+and `--record-only` skips it.
 
-## Privacy and footprint
-
-- **Zero dependencies.** Plain Node, no `package.json`, nothing to install.
-- **Localhost only.** The server listens on `127.0.0.1:4877` and talks to
-  nothing but the local herdr CLI (and, if you enabled it, your own second
-  machine over your own ssh config). Nothing leaves your machine.
-- All board state lives in `state/` (gitignored) as small JSON files you can
-  read and edit by hand.
-
-## Handing a task to a worker agent
-
-`bin/teammate.mjs` is the other half of the same idea: instead of watching
-sessions you opened by hand, an agent session opens one itself.
+A worker agent is hired from inside a herdr pane.
 
 ```
-node bin\teammate.mjs new "Rewrite the CSV parser, keep the tests green"
+node bin\teammate.mjs new "Rewrite the CSV parser, keep the tests green" --tree
 node bin\teammate.mjs check
 node bin\teammate.mjs close tm-0814-223149
 ```
 
-`new` creates a tab in the window it is run from, starts a coding agent there
-with a written brief, and records the tab, the pane and the folder in
-`state/teammates/`. The worker reports by appending one-line updates
-(`working: …`, `needs-decision: …`, `done: …`) to its own status file, so
-`check` is a single cheap pass that costs no agent tokens: it prints only what
-wants your attention and exits 1 when something does. `close` refuses to touch
-anything it cannot prove is still the tab it opened, and erases the record only
-after herdr answers that the pane is gone.
+All optional settings are environment variables.
 
-With `--tree`, the worker also gets its own pooled git worktree: teammate
-leases a copy of the repository from treehouse and puts it on a fresh branch
-named after the worker (`tm-…`) cut from the captain's current commit, so parallel workers never
-collide on files. The copy is wiped when it goes back to the pool at close —
-only commits survive — so `close` refuses while uncommitted changes sit in it,
-then reports how many commits landed on the branch and how to merge them.
+| Variable | Default | Effect |
+|---|---|---|
+| `SHEEPDOG_RECAP_URL` | `http://127.0.0.1:1234/v1/chat/completions` | The OpenAI-compatible endpoint that writes the recap line. |
+| `SHEEPDOG_RECAP_MODEL` | `qwen3-4b-instruct-2507` | The model name sent to it. |
+| `SHEEPDOG_RECAP_KEY` | none | Bearer key, sent only when set. |
+| `SHEEPDOG_RECAP_NIGHT_URL` | `http://127.0.0.1:8099` | A second local model server probed before each recap and asked instead when it is up; `SHEEPDOG_RECAP_NIGHT_KEY` or `SHEEPDOG_RECAP_NIGHT_KEY_FILE` supplies its key. |
+| `SHEEPDOG_REMOTE_HOST` | unset | The ssh alias of the second computer to poll. |
+| `SHEEPDOG_CACHE_TTL_MIN` | 60 | Minutes the prompt cache is assumed to live. |
+| `SHEEPDOG_CACHE_WARN_MIN` | 10 | Minutes before the end at which the card warns. |
+| `SHEEPDOG_URL` | `http://127.0.0.1:4877` | Where `dispatch.mjs` finds the board. |
 
-See `docs/teammate.md`.
+## Safety limits and blind spots
 
-## How it talks to herdr
+- The server listens on `127.0.0.1:4877` only. It talks to the local herdr
+  CLI, the lavish-axi CLI if it is installed, the local model servers and, if
+  you set it, your own second computer through your own ssh config. Session
+  text leaves your machine only if you point `SHEEPDOG_RECAP_URL` or
+  `SHEEPDOG_RECAP_NIGHT_URL` at another computer; the ssh poll sends one
+  `pgrep` command and reads its answer.
+- Reading changes nothing: herdr lists, the `/proc` sweep, journal tails and
+  `pgrep` over ssh only look. The board never moves a card between lanes,
+  never writes a note, never renames a herdr window and never sends a prompt
+  into a session on its own. `dispatch launch` sends only on your word.
+- The Power button on a card asks "sure?", then tells the session to save
+  everything important to the project's memory and commit, waits for it to
+  finish (each wait times out after 15 minutes, up to four waits), appends the
+  window to `state/closed.jsonl` and closes it. If the session asks a question
+  instead, closing stops and the board tells you.
+- `teammate` refuses four things: to hire from outside a herdr pane, to take
+  `say` or `close` from another herdr pane unless it adds `--steal`, to close
+  a tab it cannot prove is still the one it created, and to erase a record
+  before herdr answers `pane_not_found`. A `--tree` worker's copy is returned
+  to the pool only after that confirmation and only with a clean tree. The
+  worker runs `claude --dangerously-skip-permissions`, so the brief and the
+  folder you chose are the only limits on what it may do. Details in
+  `docs/teammate.md`.
+- Session facts depend on the Claude Code journal and environment layout
+  (verified on Claude Code 2.1.238). If a Claude Code update changes that
+  layout, the board shows fewer facts but never a false one; the header shows
+  FACTS OFFLINE when the sweep stops seeing panes. Known blind spot: the
+  `/proc` sweep sees Git Bash processes only, so a watcher started as a native
+  Windows process is invisible and its session reads as "says it waits —
+  nothing running here".
+- All board state lives in `state/`, which is gitignored, as small JSON files
+  you can read and edit by hand.
 
-See `docs/herdr-api.md` — a field guide to the herdr CLI surface the board
-uses: what can be read (sessions, states, titles, windows), what can be
-written back (metadata tokens, so board data shows up inside herdr itself),
-and what herdr does not track (time in state, priority), which is exactly
-the part sheepdog stores for itself.
+## Repository layout
+
+```
+bin/board-server.mjs    the server: herdr polling, verdicts, brief, state files
+bin/board.html          the page: lanes, cards, prompt-cache clock, Team and Other views
+bin/session-facts.mjs   process sweep and journal facts behind the busy-or-not decision
+bin/dispatch.mjs        the dispatcher CLI (brief, type, launch, note, done, clear, rename)
+bin/teammate.mjs        hire, watch and close a worker agent in its own herdr tab
+bin/board.cmd, bin/dispatch.cmd, bin/teammate.cmd, bin/board-hidden.vbs   Windows launchers
+docs/herdr-api.md       what herdr provides and what it accepts back
+docs/teammate.md        the teammate commands, the card, the status contract, the refusals
+FAST-WORKER-RULES.md    rules to prepend by hand to a worker's brief on internal tooling (teammate does not add them itself)
+treehouse.toml          settings for treehouse, the separate CLI that pools git worktrees for --tree workers
+state/                  board state, gitignored
+```
 
 ## License
 
-MIT — see `LICENSE`.
+MIT. See `LICENSE`.
